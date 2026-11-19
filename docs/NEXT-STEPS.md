@@ -134,6 +134,17 @@ bash scripts/install/four-repos.sh arctic
 - `triton` 优先复用当前环境记录的 triton-ascend 版本。若尚未安装，采用 3.6.0.post2 作为候选，供 FSDPTurbo 的 Triton 3.6 路径测试；这个组合仍需在 CANN 9.3.0 上验证。有配套 wheel 时可先执行 `export STEP5_TRITON_ASCEND_SPEC=/绝对路径/triton_ascend-实际文件名.whl`。脚本按 wheel 声明安装依赖，保留已验证的 NumPy，最后由 Ascend wheel 提供 Triton 模块。如果 wheel 声明的 NumPy 与现有版本不同，脚本打印差异，后续应检查真实模型上的 Triton kernel。
 - `arctic` 用临时目录准备 Arctic 0.1.1 的构建依赖，在当前 torch 上构建，避免更改运行时 protobuf。
 
+### deps 报 numpy==2.5.5 与 mistral-common 冲突
+
+Python 3.12 上，本次解析到的 mistral-common 要求 NumPy 小于 2.4，OpenCV 4.11 要求至少 1.26.0。此时可选用原 A5 环境的 1.26.4。保持已验证的 Conda、CANN 和网络环境，选好之前测试用的空闲卡，在仓库根目录逐行执行。
+
+```sh
+bash scripts/install/recheck-numpy.sh
+bash scripts/install/four-repos.sh deps
+```
+
+第一条会备份原约束，仅安装 NumPy 的二进制 wheel，在逻辑卡 0 复跑基础 NPU 和 GBSA/GBSAG 检查。两项都通过后才更新 NumPy 约束并打印 `NumPy 1.26.4 verified`。如果检查失败，当前环境里可能已装入 1.26.4，约束文件仍保留原值。可处理报错后重跑第一条，或用 `python -m pip install --only-binary=:all: --no-deps 'numpy==2.5.5'` 恢复本次修改前的版本。
+
 ## 6. 逐仓安装
 
 ```sh
