@@ -113,13 +113,25 @@ arctic)
     ;;
 vllm)
     unset VLLM_USE_PRECOMPILED VLLM_USE_PRECOMPILED_RUST
+    export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-$MAX_JOBS}
+    soft=$(ulimit -Sn)
+    hard=$(ulimit -Hn)
+    target=8192
+    if [[ $hard != unlimited ]] && (( hard < target )); then target=$hard; fi
+    if [[ $soft != unlimited ]] && (( soft < target )); then
+        ulimit -Sn "$target"
+    fi
+    printf 'vllm: nofile soft=%s -> %s hard=%s; Cargo jobs=%s\n' \
+        "$soft" "$(ulimit -Sn)" "$hard" "$CARGO_BUILD_JOBS"
     # setuptools-rust invokes Cargo in subprocesses. Use the same registry,
     # Git transport and persistent project cache during fetch and compilation.
     export CARGO_HOME="$work/vllm-cargo"
     mkdir -p "$CARGO_HOME"
     cp "$root/scripts/install/cargo-a3.toml" "$CARGO_HOME/config.toml"
     export CARGO_NET_GIT_FETCH_WITH_CLI=true
+    echo 'vllm: fetching locked Rust dependencies'
     (cd src/vllm && cargo fetch --locked --manifest-path rust/src/cmd/Cargo.toml)
+    echo 'vllm: building editable package and Rust extensions'
     VLLM_TARGET_DEVICE=empty VLLM_REQUIRE_RUST_FRONTEND=1 "${editable[@]}" "$root/src/vllm"
     python -c 'import vllm._rust_tool_parser as p; print(p.__file__)'
     ;;
