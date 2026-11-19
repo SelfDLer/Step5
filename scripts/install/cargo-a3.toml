@@ -1,0 +1,6 @@
+# Used only by the staged vLLM source build on A3.
+[source.crates-io]
+replace-with = "step5-tuna"
+
+[source.step5-tuna]
+registry = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"

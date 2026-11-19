@@ -113,6 +113,13 @@ arctic)
     ;;
 vllm)
     unset VLLM_USE_PRECOMPILED VLLM_USE_PRECOMPILED_RUST
+    # setuptools-rust invokes Cargo in subprocesses. Use the same registry,
+    # Git transport and persistent project cache during fetch and compilation.
+    export CARGO_HOME="$work/vllm-cargo"
+    mkdir -p "$CARGO_HOME"
+    cp "$root/scripts/install/cargo-a3.toml" "$CARGO_HOME/config.toml"
+    export CARGO_NET_GIT_FETCH_WITH_CLI=true
+    (cd src/vllm && cargo fetch --locked --manifest-path rust/src/cmd/Cargo.toml)
     VLLM_TARGET_DEVICE=empty VLLM_REQUIRE_RUST_FRONTEND=1 "${editable[@]}" "$root/src/vllm"
     python -c 'import vllm._rust_tool_parser as p; print(p.__file__)'
     ;;

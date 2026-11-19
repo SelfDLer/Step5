@@ -158,6 +158,33 @@ vLLM 使用 `VLLM_TARGET_DEVICE=empty` 并构建 Rust 解析器。vLLM Ascend �
 
 四仓都按源码 editable 安装，使用 `--no-deps --no-build-isolation`。需要从目标 A3 下载依赖并本机编译。镜像可达性、工具链和这组版本仍以目标机执行结果为准。
 
+### vLLM 拉取 Rust 依赖超时
+
+更新分支后，在之前的终端直接运行 `bash scripts/install/four-repos.sh vllm`。此阶段会使用清华 Cargo 稀疏索引和系统 Git，先按 `src/vllm/rust/Cargo.lock` 下载依赖，再构建 editable 包。两步共用项目缓存 `.local/a3-install/vllm-cargo/`，下载中断后可重复执行同一命令。镜像配置见[清华镜像站说明](https://mirrors.tuna.tsinghua.edu.cn/help/crates.io-index/)。
+
+若仍超时，分别在 A3 检查镜像和锁文件中的两个 GitHub 依赖：
+
+```sh
+curl -fsSL --connect-timeout 10 --max-time 30 https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/config.json
+git ls-remote https://github.com/smg-project/llm-multimodal HEAD
+git ls-remote https://github.com/oss-harmony/harmony refs/tags/v0.0.11
+```
+
+第一条应返回带有 `dl` 的 JSON。后两条走当前终端的 Git 网络配置，应分别输出 HEAD 和 tag 的 SHA。若 A3 平时通过 HTTPS 代理访问 GitHub，先在该终端加载已知可用的代理设置，然后重试。若 HTTPS 失败而 GitHub SSH 已可用，可在子 shell 中给**这次构建**指定 Git 的 HTTPS 到 SSH 改写：
+
+```sh
+(
+  export GIT_CONFIG_COUNT=1
+  export GIT_CONFIG_KEY_0='url.git@github.com:.insteadOf'
+  export GIT_CONFIG_VALUE_0='https://github.com/'
+  git ls-remote https://github.com/smg-project/llm-multimodal HEAD &&
+    git ls-remote https://github.com/oss-harmony/harmony refs/tags/v0.0.11 &&
+    bash scripts/install/four-repos.sh vllm
+)
+```
+
+GitHub 仍不可达时，Cargo 镜像只能提供注册表中的 crate，两个 Git 仓库还需要可达的传输路径。保留原 SHA，按第一条失败的网络命令定位。
+
 ## 7. 验证安装结果
 
 保持已验证的空闲卡可见，逻辑设备号为 0。在当前终端执行：
