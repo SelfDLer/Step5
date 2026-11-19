@@ -116,7 +116,45 @@ SHA 应分别以 `db76ca6`、`14bffd5`、`144a421`、`bd4a6ce` 开头（按仓�
 - verl 要求 `numpy>=2.0.0`、`transformers>=5.5.3,!=5.6.0,<5.13`；原 A5 记录为 NumPy 1.26.4、Transformers 5.14.1，且固定 vLLM Ascend 要求 Transformers 5.14.1。因此这组原始元数据不能同时由普通 pip 求解满足。
 - FSDPTurbo 同时声明 `triton` 和 `triton_ascend`，需要明确 Ascend 实现及实际导入来源，避免安装过程中覆盖同名模块。
 
-`--no-deps` 只能跳过依赖解析，不能补齐运行依赖或证明兼容。完整四仓安装命令需要把这些例外落实到明确的依赖清单与导入检查；不能把保存基础版本或取完源码当作四仓已经安装成功。
-这些是旧快照复现的限制，不应套用 `step5-up` 新六仓安装脚本。
+## 5. 安装构建工具和运行依赖
 
-你现在可以先完成本页四步；后续安装继续使用这里的网络配置和实际保存的基础版本。
+前四步完成后，在同一个已激活的 A3 终端进入 Step5 根目录，执行 `git pull --ff-only`。如果换过终端，先按第 2 节恢复 Conda、CANN、网络配置。若机器另行提供与 CANN 配套的 ATB，按其实际位置加载 ATB 的 `set_env.sh`。
+
+下面每次运行一行，上一步显示对应的 `completed` 后再继续。日志保存在 `.local/a3-install/`。脚本会检查当前 Python、四个源码提交，以及准备阶段保存的 torch、torch-npu、NumPy 版本。
+
+```sh
+bash scripts/install/four-repos.sh tools
+bash scripts/install/four-repos.sh deps
+bash scripts/install/four-repos.sh triton
+bash scripts/install/four-repos.sh arctic
+```
+
+- `tools` 安装 Python 构建工具，并检查系统编译工具及 Rust。vLLM 的 `rust-toolchain.toml` 指定 Rust 1.95。已有 rustup 时，可运行 `rustup toolchain install 1.95 --profile minimal`。若机器用 Conda 提供 Rust，可在当前环境运行 `conda_with_shell_proxy install -p "$CONDA_PREFIX" --freeze-installed --override-channels -c "$CONDA_CHANNEL" 'rust=1.95.*'`，查看事务后再确认。C/C++ 编译器按目标 CANN 工具链配套。
+- `deps` 先装配套的 CPU torchvision/torchaudio，再按四仓依赖安装普通 Python 包。沿用旧环境的 Transformers 5.14.1、Ray 2.48.0、TransferQueue 0.1.11 和 TensorDict 0.10.0。其余间接依赖由 A3 的 pip 解析。镜像若缺指定包，保留报错中的包名和版本，使用提供方对应的 A3 包源或 wheel。
+- `triton` 优先复用当前环境记录的 triton-ascend 版本。若尚未安装，采用 3.6.0.post2 作为候选，供 FSDPTurbo 的 Triton 3.6 路径测试；这个组合仍需在 CANN 9.3.0 上验证。有配套 wheel 时可先执行 `export STEP5_TRITON_ASCEND_SPEC=/绝对路径/triton_ascend-实际文件名.whl`。脚本按 wheel 声明安装依赖，保留已验证的 NumPy，最后由 Ascend wheel 提供 Triton 模块。如果 wheel 声明的 NumPy 与现有版本不同，脚本打印差异，后续应检查真实模型上的 Triton kernel。
+- `arctic` 用临时目录准备 Arctic 0.1.1 的构建依赖，在当前 torch 上构建，避免更改运行时 protobuf。
+
+## 6. 逐仓安装
+
+```sh
+bash scripts/install/four-repos.sh vllm
+bash scripts/install/four-repos.sh ascend
+bash scripts/install/four-repos.sh fsdp
+bash scripts/install/four-repos.sh verl
+```
+
+vLLM 使用 `VLLM_TARGET_DEVICE=empty` 并构建 Rust 解析器。vLLM Ascend 从 GitCode 拉取固定 catlass，用本机 A3 和 CANN 编译插件扩展及仓库自带的 ACLNN 算子。其产物安装在当前 vLLM Ascend 源码树中。保留之前验证过的 GBSA/GBSAG wrapper 和算子环境。若芯片自动识别失败，请按本机板卡确认 `SOC_VERSION` 后重跑 `ascend`。默认构建并发为 4，内存不足时可执行 `MAX_JOBS=2 bash scripts/install/four-repos.sh ascend`。
+
+四仓都按源码 editable 安装，使用 `--no-deps --no-build-isolation`。需要从目标 A3 下载依赖并本机编译。镜像可达性、工具链和这组版本仍以目标机执行结果为准。
+
+## 7. 验证安装结果
+
+保持已验证的空闲卡可见，逻辑设备号为 0。在当前终端执行：
+
+```sh
+export STEP5_EP_DISPATCHER=custom_native_eager_fused_forward
+bash scripts/install/four-repos.sh verify
+python -m pip check
+```
+
+`verify` 检查 vLLM 选中 NPU、四仓模块实际来源、Rust 和 Ascend 原生扩展、FSDPTurbo Step5 模型及 verl PPO 入口，并复跑基础 NPU 和 GBSA/GBSAG 数值检查。看到 `verify completed` 后再进入带权重的单批精度验证。`pip check` 会列出元数据冲突，核对前述 verl/Transformers 及 NumPy 例外；其他报错需逐条定位。某阶段失败可修复后只重跑该阶段。完整模型使用的 FLA、batch-invariant 等可选实现应按实际启用的后端在 A3 验收。
