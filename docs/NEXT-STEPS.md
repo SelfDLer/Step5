@@ -199,6 +199,14 @@ GitHub 仍不可达时，Cargo 镜像只能提供注册表中的 crate，两个 
 
 ## 7. 验证安装结果
 
+已安装四仓后，如果 `verl.trainer.main_ppo` 经 `datasets` 导入 `pyarrow.lib` 时提示 `pyarrow requires NumPy 2.0 or newer, found 1.26.4`，请在已激活的 Step5 环境和仓库根目录修复数据依赖。原 A5 使用 NumPy 1.26.4、PyArrow 21.0.0、datasets 4.4.1。安装命令沿用第 3 步保存的基础版本约束，PyArrow 使用匹配本机的 wheel。
+
+```sh
+python -m pip install -c .local/a3-install/verified-base.constraints.txt \
+    --only-binary=pyarrow 'pyarrow==21.0.0' 'datasets==4.4.1'
+python -c 'import numpy, pyarrow, datasets; from verl.trainer import main_ppo; ds = datasets.Dataset.from_dict({"x": numpy.array([1, 2])}); assert ds[:]["x"] == [1, 2]; print(numpy.__version__, pyarrow.__version__, datasets.__version__, main_ppo.__file__)'
+```
+
 保持已验证的空闲卡可见，逻辑设备号为 0。在当前终端执行：
 
 ```sh

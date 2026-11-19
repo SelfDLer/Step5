@@ -57,7 +57,7 @@ deps)
     "${pip_install[@]}" --extra-index-url "$ASCEND_PIP_INDEX_URL" \
         -r src/vllm/requirements/common.txt -r "$work/ascend-runtime.txt" \
         'opencv-python-headless==4.11.0.86' 'transformers==5.14.1' \
-        accelerate codetiming datasets dill hydra-core peft 'pyarrow>=19' pylatexenc \
+        accelerate codetiming 'datasets==4.4.1' dill hydra-core peft 'pyarrow==21.0.0' pylatexenc \
         'ray[default]==2.48.0' torchdata 'tensordict==0.10.0' wandb tensorboard \
         'TransferQueue==0.1.11' concurrent-log-handler attrs googleapis-common-protos \
         pyelftools pytest-xdist expecttest
