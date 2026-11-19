@@ -158,6 +158,18 @@ vLLM 使用 `VLLM_TARGET_DEVICE=empty` 并构建 Rust 解析器。vLLM Ascend �
 
 四仓都按源码 editable 安装，使用 `--no-deps --no-build-isolation`。需要从目标 A3 下载依赖并本机编译。镜像可达性、工具链和这组版本仍以目标机执行结果为准。
 
+### vllm-server 构建提示 Could not find protoc
+
+固定版本的 `vllm-server` 使用 Protocol Buffers 编译器处理 `control.proto` 和 `inference.proto`，后者导入 `google/protobuf/struct.proto`。在 Step5 根目录、已激活的终端执行以下命令。第一条加载已配置的 Conda 镜像，第二条把编译工具和标准定义安装到项目本地的独立目录。继续使用当前 Step5 Python 环境运行第三条。
+
+```sh
+source scripts/install/network.sh
+conda_with_shell_proxy create -y -p "$PWD/.local/a3-install/protoc-env" --override-channels -c "$CONDA_CHANNEL" libprotobuf
+MAX_JOBS=1 CARGO_BUILD_JOBS=1 bash scripts/install/four-repos.sh vllm
+```
+
+只需创建一次工具环境。新版安装脚本会自动选取其中的 protoc 和 include 目录，先编译上述两个协议文件再运行 Cargo，并复用上次下载和编译的缓存。如果已有配套编译器，也可以显式设置 `PROTOC` 为其绝对路径，`PROTOC_INCLUDE` 为包含 `google/protobuf/struct.proto` 的目录。
+
 ### vLLM 拉取 Rust 依赖超时
 
 更新分支后，在之前的终端直接运行 `bash scripts/install/four-repos.sh vllm`。此阶段会使用清华 Cargo 稀疏索引和系统 Git，先按 `src/vllm/rust/Cargo.lock` 下载依赖，再构建 editable 包。两步共用项目缓存 `.local/a3-install/vllm-cargo/`，下载中断后可重复执行同一命令。镜像配置见[清华镜像站说明](https://mirrors.tuna.tsinghua.edu.cn/help/crates.io-index/)。

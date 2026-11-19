@@ -113,6 +113,23 @@ arctic)
     ;;
 vllm)
     unset VLLM_USE_PRECOMPILED VLLM_USE_PRECOMPILED_RUST
+    protoc_prefix="$work/protoc-env"
+    if [[ -z ${PROTOC:-} && -x "$protoc_prefix/bin/protoc" ]]; then
+        export PROTOC="$protoc_prefix/bin/protoc"
+        export PROTOC_INCLUDE="${PROTOC_INCLUDE:-$protoc_prefix/include}"
+    fi
+    if ! command -v "${PROTOC:-protoc}" >/dev/null; then
+        echo 'Missing protoc. From the Step5 root, run:' >&2
+        echo 'conda_with_shell_proxy create -y -p "$PWD/.local/a3-install/protoc-env" --override-channels -c "$CONDA_CHANNEL" libprotobuf' >&2
+        exit 1
+    fi
+    # Match the server build.rs inputs, including the standard struct.proto import.
+    proto_dir="$root/src/vllm/rust/proto"
+    proto_paths=(-I "$proto_dir")
+    if [[ -n ${PROTOC_INCLUDE:-} ]]; then proto_paths+=(-I "$PROTOC_INCLUDE"); fi
+    "${PROTOC:-protoc}" --version
+    "${PROTOC:-protoc}" "${proto_paths[@]}" --experimental_allow_proto3_optional \
+        --descriptor_set_out=/dev/null "$proto_dir/control.proto" "$proto_dir/inference.proto"
     export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-$MAX_JOBS}
     soft=$(ulimit -Sn)
     hard=$(ulimit -Hn)
