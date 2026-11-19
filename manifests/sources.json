@@ -1,0 +1,163 @@
+{
+  "source_project": "/mnt/share/z00988734/projects/step5-minimal-r3-deepep-20261110",
+  "source_project_commit": "971ff07b4a8ca7bbebcc2cf49d97d540781dd31b",
+  "export_date": "2026-11-19",
+  "export_branch": "a5toa3",
+  "repositories": {
+    "verl": {
+      "url": "https://github.com/SelfDLer/verl.git",
+      "branch": "step5-a5",
+      "commit": "db76ca612ed3b3febf7d35c26a9448c5f0ff09a7"
+    },
+    "FSDPTurbo": {
+      "url": "https://gitcode.com/SelfDLer/FSDPTurbo.git",
+      "branch": "step5-a5",
+      "commit": "14bffd579e36dfca3fbf550be3bc6427b65e2153"
+    },
+    "vllm": {
+      "url": "https://github.com/SelfDLer/vllm_step_yunyao.git",
+      "branch": "step5-a5",
+      "commit": "144a421dff083f73db81ab5bcf9fb0e60f91125d"
+    },
+    "vllm-ascend": {
+      "url": "https://github.com/SelfDLer/vllm-ascend-step-yunyao.git",
+      "branch": "step5-a5",
+      "commit": "bd4a6ce33465e9364a6e2e06f163a96fb0e132ef"
+    }
+  },
+  "deepep": "Excluded by user request; original A5 scripts may still reference it.",
+  "copied_source_files": [
+    {
+      "path": "reference/a5/scripts/README.md",
+      "source": "/mnt/share/z00988734/projects/step5-minimal-r3-deepep-20261110/scripts/README.md",
+      "sha256": "70d2ffdfb0923de3e6d44419f57b2108438a4ab450f5557e1bc766adf48fe750",
+      "bytes": 3144
+    },
+    {
+      "path": "reference/a5/scripts/activate.sh",
+      "source": "/mnt/share/z00988734/projects/step5-minimal-r3-deepep-20261110/scripts/activate.sh",
+      "sha256": "ecae127c59cf9a33f1aabb08ec97230ed0dc8fc3f9c1b1f7d8caa479b3b1f179",
+      "bytes": 1159
+    },
+    {
+      "path": "reference/a5/scripts/rl_352e.sh",
+      "source": "/mnt/share/z00988734/projects/step5-minimal-r3-deepep-20261110/scripts/rl_352e.sh",
+      "sha256": "8a30c6db7159536c4851338108e457511d294e65b2e3520e56d69f53146cc1d3",
+      "bytes": 3499
+    },
+    {
+      "path": "reference/a5/scripts/rl_bytelevel_model.py",
+      "source": "/mnt/share/z00988734/projects/step5-minimal-r3-deepep-20261110/scripts/rl_bytelevel_model.py",
+      "sha256": "95b4eba8df435af6a578bc2cfb82131a7b2371b6c0baf95ec29266570fd8b0a0",
+      "bytes": 2505
+    },
+    {
+      "path": "reference/a5/scripts/run_lora.sh",
+      "source": "/mnt/share/z00988734/projects/step5-minimal-r3-deepep-20261110/scripts/run_lora.sh",
+      "sha256": "612539b7087d28c197cf9f94d02dacac1a6ecfe95f7503d37df9ef4bf1db3dcb",
+      "bytes": 814
+    },
+    {
+      "path": "reference/a5/scripts/run_rl_352e_16node.sh",
+      "source": "/mnt/share/z00988734/projects/step5-minimal-r3-deepep-20261110/scripts/run_rl_352e_16node.sh",
+      "sha256": "5e5ccbad58e2e518e70c916fb7168515acfd92958fc58c43b32db5aea0431c0d",
+      "bytes": 6402
+    },
+    {
+      "path": "reference/a5/scripts/run_rl_rmpad.sh",
+      "source": "/mnt/share/z00988734/projects/step5-minimal-r3-deepep-20261110/scripts/run_rl_rmpad.sh",
+      "sha256": "ea4b77aa818c7ee3a996bcd5bbc5c94b0a19ccf6896a701a008d2eee846ef3ff",
+      "bytes": 12086
+    },
+    {
+      "path": "reference/a5/scripts/run_rl_sft100_1node.sh",
+      "source": "/mnt/share/z00988734/projects/step5-minimal-r3-deepep-20261110/scripts/run_rl_sft100_1node.sh",
+      "sha256": "8fdcbbc36470d6c01fc4b615925ab47e43be0d32efc84954362916cc08a41117",
+      "bytes": 2779
+    },
+    {
+      "path": "reference/a5/scripts/step5_geo3k_reward.py",
+      "source": "/mnt/share/z00988734/projects/step5-minimal-r3-deepep-20261110/scripts/step5_geo3k_reward.py",
+      "sha256": "4bc076c9bff9538a44b269da9a619bfe003f0aaed210102159f4c638accc153b",
+      "bytes": 1918
+    },
+    {
+      "path": "reference/a5/scripts/run_rl_rmpad_16node.sh",
+      "source": "/mnt/share/z00988734/projects/step5-minimal-r3-deepep-20261110/scripts/run_rl_rmpad_16node.sh",
+      "sha256": "097e9371542dc357eda2ca304963553aae19ebc0412b7199e46bea6d16b6728b",
+      "bytes": 5978
+    },
+    {
+      "path": "reference/a5/scripts/run_rl_rmpad_2node.sh",
+      "source": "/mnt/share/z00988734/projects/step5-minimal-r3-deepep-20261110/scripts/run_rl_rmpad_2node.sh",
+      "sha256": "0949382df0672dc41932b887c6bfefa64093793a88701dc3fc8506b72f152b2a",
+      "bytes": 3548
+    },
+    {
+      "path": "reference/a5/scripts/start_rl_ray_2node.sh",
+      "source": "/mnt/share/z00988734/projects/step5-minimal-r3-deepep-20261110/scripts/start_rl_ray_2node.sh",
+      "sha256": "b7a74da2e0dae44fe19c4b628f09a933a68d8e15da40338f4a88f86dc363aad5",
+      "bytes": 1534
+    },
+    {
+      "path": "reference/a5/scripts/check_mc2_dispatch_rows.py",
+      "source": "/mnt/share/z00988734/projects/step5-minimal-r3-deepep-20261110/scripts/check_mc2_dispatch_rows.py",
+      "sha256": "8d22c04d98b2e5a9a840e7fa09cac8e142b8c32d571704fa74b1fd96a41bb99f",
+      "bytes": 3762
+    },
+    {
+      "path": "reference/a5/scripts/repro_step5_mc2_128.py",
+      "source": "/mnt/share/z00988734/projects/step5-minimal-r3-deepep-20261110/scripts/repro_step5_mc2_128.py",
+      "sha256": "c65c3112ef2451a061d680b11ab8c28d141a48976e53191d71c4bbdf5868033f",
+      "bytes": 3609
+    },
+    {
+      "path": "reference/a5/scripts/python/sitecustomize.py",
+      "source": "/mnt/share/z00988734/projects/step5-minimal-r3-deepep-20261110/scripts/python/sitecustomize.py",
+      "sha256": "cf93c460397e87a15c0f1009c2b67a0c78acb533dfde50e4ad925cb7267f74e1",
+      "bytes": 721
+    },
+    {
+      "path": "reference/a5/cann_ops/dispatch/build.py",
+      "source": "/mnt/share/z00988734/projects/step5-minimal-r3-deepep-20261110/src/cann_ops/dispatch/build.py",
+      "sha256": "e542ca911deeb1d8621df23883b56681067eebf48f7477304f5b83ed2e4be2e0",
+      "bytes": 2755
+    },
+    {
+      "path": "reference/a5/cann_ops/dispatch/input.json",
+      "source": "/mnt/share/z00988734/projects/step5-minimal-r3-deepep-20261110/src/cann_ops/dispatch/input.json",
+      "sha256": "d1aa04c191c54c69b8095db9156257b0e8dfdd21b3c9df1a9b76a04acc297dab",
+      "bytes": 3390
+    },
+    {
+      "path": "reference/a5/cann_ops/dispatch/moe_distribute_dispatch_v2.h",
+      "source": "/mnt/share/z00988734/projects/step5-minimal-r3-deepep-20261110/src/cann_ops/dispatch/moe_distribute_dispatch_v2.h",
+      "sha256": "865909162b45fbf256bce09bbf670e16763cacb428fdc6a739f09a53e7ec0c11",
+      "bytes": 85252
+    },
+    {
+      "path": "reference/a5/cann_ops/dispatch/moe_distribute_dispatch_v3_apt.cpp",
+      "source": "/mnt/share/z00988734/projects/step5-minimal-r3-deepep-20261110/src/cann_ops/dispatch/moe_distribute_dispatch_v3_apt.cpp",
+      "sha256": "8a7fbba57b8ca4bdffec1ba269deba3f4ec09b98f1c5668b6da04f43caf9a028",
+      "bytes": 8596
+    },
+    {
+      "path": "reference/a5-runtime/activate.sh",
+      "source": "/mnt/share/z00988734/environments/step5-cann920-post7-rl-521/activate.sh",
+      "sha256": "49f42f5ae7c5814182ff72ed7ff1a2eac1c094a8f65c7305507cc1691141c84a",
+      "bytes": 2786
+    },
+    {
+      "path": "reference/a5-runtime/_step5_post7_shared_sources.py",
+      "source": "/mnt/share/z00988734/environments/step5-cann920-post7-rl-521/.venv/lib/python3.12/site-packages/_step5_post7_shared_sources.py",
+      "sha256": "1cf551346b7bb1930c4978aa2c60090177e7ca97c4c3af0025ce53aa92d6643f",
+      "bytes": 2866
+    },
+    {
+      "path": "reference/a5-runtime/step5_post7_shared_sources.pth",
+      "source": "/mnt/share/z00988734/environments/step5-cann920-post7-rl-521/.venv/lib/python3.12/site-packages/step5_post7_shared_sources.pth",
+      "sha256": "02905c709bfac65e43beac98a8f4533dd2503c1e12952e32c72062534fc15201",
+      "bytes": 74
+    }
+  ]
+}

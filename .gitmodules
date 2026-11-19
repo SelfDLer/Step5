@@ -1,0 +1,19 @@
+[submodule "verl"]
+	path = src/verl
+	url = https://github.com/SelfDLer/verl.git
+	branch = step5-a5
+
+[submodule "FSDPTurbo"]
+	path = src/FSDPTurbo
+	url = https://gitcode.com/SelfDLer/FSDPTurbo.git
+	branch = step5-a5
+
+[submodule "vllm"]
+	path = src/vllm
+	url = https://github.com/SelfDLer/vllm_step_yunyao.git
+	branch = step5-a5
+
+[submodule "vllm-ascend"]
+	path = src/vllm-ascend
+	url = https://github.com/SelfDLer/vllm-ascend-step-yunyao.git
+	branch = step5-a5
