@@ -50,3 +50,6 @@ dumps/
 .env.*
 *.pem
 *.key
+
+# Local A3 installation constraints and package snapshots
+.local/

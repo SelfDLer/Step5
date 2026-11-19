@@ -10,6 +10,9 @@
 检查脚本位于 `scripts/checks/`，可在四仓安装前分别检查 CANN、基础 NPU 计算和 GBSA/GBSAG。
 安装 torch/torch_npu 的版本需先根据目标 A3 的 CANN 确认；没有默认安装最新版。
 
+基础 NPU 与 GBSA/GBSAG 均通过后，见 [网络配置与四仓安装准备](docs/NEXT-STEPS.md)。
+网络配置复用用户指定的 server-transfer 镜像与 Conda 代理处理，可在 Bash/zsh 中手动加载。
+
 ## 获取四仓
 
 ```sh

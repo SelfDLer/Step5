@@ -4,6 +4,8 @@
 命令适用于 Bash 和 zsh；检查 CANN 的脚本显式用 Bash 执行。`python=3.12` 后不要加句点。
 脚本只打印检查结果，不修改 CANN、模型或数据，不启动完整训练。
 
+基础 NPU 与 GBSA/GBSAG 均已通过时，接着执行 [网络配置与四仓安装准备](NEXT-STEPS.md)，保留已验证的 torch/torch_npu，不重复安装。
+
 ## 0. 获取检查脚本
 
 首次获取：
