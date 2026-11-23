@@ -66,3 +66,25 @@ bash "$RL_SCRIPT" smoke ray_kwargs.ray_init.num_cpus=null
 ```
 
 若自动检测后单节点仍无法同时提供 16 个空闲 NPU 和 48 个空闲逻辑 CPU，请检查作业或容器的 CPU 配额、NPU 分配和其他任务占用；在资源分配足够后重跑。
+
+### vLLM 开发版本被报为低于 0.18.0
+
+此分支的 verl 先判断当前进程的 `is_npu_available`。已安装 vLLM 且 NPU 可用时，它直接加载 vLLM。若版本号显示为 `0.1.dev…empty` 并报 “SGLang also not Found”，请在报错所用的 A3 环境和终端检查：
+
+```bash
+python -P - <<'PY'
+import os, sys
+from importlib.metadata import version
+from verl.utils import device
+print("python:", sys.executable, "verl device module:", device.__file__)
+print("vllm:", version("vllm"), "verl NPU:", device.is_npu_available)
+for key in ("TORCH_DEVICE_BACKEND_AUTOLOAD", "ASCEND_RT_VISIBLE_DEVICES"):
+    print(key, repr(os.getenv(key)))
+import torch_npu
+import torch
+print("after explicit torch_npu import:", torch.npu.is_available(), "count:", torch.npu.device_count())
+PY
+```
+
+* 若 `verl NPU: False`，先看显式导入是否报缺少 CANN 动态库，并确认 Conda、CANN 和可见卡列表。若设置了 `TORCH_DEVICE_BACKEND_AUTOLOAD=0`，执行 `unset TORCH_DEVICE_BACKEND_AUTOLOAD`，再用新的 Python 进程复查。单机 16 卡启动前应看到 `verl NPU: True` 和 `count: 16`。
+* 若主进程检查通过，可用 `python -P -c 'import verl.third_party.vllm as v; print(v.__file__)'` 验证相同导入。如果 traceback 标有 Ray actor 名称和 PID，且错误只在 worker 出现，检查该角色的设备可见性。对于本脚本的单机独占 16 卡作业，可按 verl 的 NPU FSDPTurbo 示例，设置 `export RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES=1`，使 Ray 保留启动器的可见卡列表；换新的 `RUN_DIR` 和 `RAY_TMPDIR` 后重启。

@@ -43,7 +43,18 @@ for key, divisor in [('moe_num_experts', ep), ('num_attention_heads', tp), ('num
         raise SystemExit(f'{key}={n} is incompatible with parallel size {divisor}')
 PY
 if [[ $mode != config ]]; then
-    python -c 'import torch, torch_npu; n = torch.npu.device_count(); assert n == 16, f"expected 16 visible NPUs, got {n}"'
+    python -P - <<'PY'
+import os
+from verl.utils.device import is_npu_available
+if not is_npu_available:
+    raise SystemExit("verl cannot see an NPU in the RL driver. Check the active CANN/torch_npu "
+                     f"environment, TORCH_DEVICE_BACKEND_AUTOLOAD={os.getenv('TORCH_DEVICE_BACKEND_AUTOLOAD')!r}, "
+                     f"ASCEND_RT_VISIBLE_DEVICES={os.getenv('ASCEND_RT_VISIBLE_DEVICES')!r}.")
+import torch
+n = torch.npu.device_count()
+if n != 16:
+    raise SystemExit(f"expected 16 visible NPUs, got {n}")
+PY
 fi
 
 # ---- A5 sft100 FP32 run settings ----
@@ -98,7 +109,7 @@ hq() {
     printf '"%s"' "$value"
 }
 worker_args=()
-for name in PYTHONPATH RL_INSIGHT_SERVER_URL VLLM_WORKER_MULTIPROC_METHOD HCCL_OP_EXPANSION_MODE \
+for name in PYTHONPATH RL_INSIGHT_SERVER_URL RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES VLLM_WORKER_MULTIPROC_METHOD HCCL_OP_EXPANSION_MODE \
     STEP5_ROLLOUT_HCCL_MODE VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY STEP5_RANK0_EXPERT_INIT \
     STEP5_STREAM_EXPERT_WEIGHTS STEP5_EFSDP_CAST_FORWARD_INPUTS VERL_FULL_DETERMINISM VLLM_BATCH_INVARIANT; do
     if [[ -n ${!name:-} ]]; then worker_args+=("++ray_kwargs.ray_init.runtime_env.env_vars.$name=$(hq "${!name}")"); fi
