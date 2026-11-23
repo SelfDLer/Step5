@@ -10,7 +10,10 @@ import re
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
+
+from step5_rollout_cases import ROLLOUT_CASES, prepare_rollout_case
 
 
 def absolute(value):
@@ -20,22 +23,131 @@ def absolute(value):
     return path
 
 
+def compile_records(cache):
+    """Map (Triton cache key, kernel name) to completion evidence on Ascend."""
+    entries = defaultdict(set)
+    for path in cache.rglob("*"):
+        if path.is_file() and path.suffix in {".source", ".ttir", ".ttadapter", ".npubin"}:
+            entries[path.parent, path.stem].add(path.suffix)
+    records = {}
+    for (directory, name), suffixes in entries.items():
+        complete = (".npubin" in suffixes and (directory / f"{name}.json").is_file()
+                    and (directory / f"__grp__{name}.json").is_file())
+        key = (directory.name, name)
+        records[key] = records.get(key, False) or complete
+    return records
+
+
+def write_states(out, states):
+    pending = out / "results.json.tmp"
+    pending.write_text(json.dumps(states, indent=2))
+    pending.replace(out / "results.json")
+
+
+def record_environment(args):
+    packages = {}
+    for dist in ("torch", "torch-npu", "triton", "triton-ascend", "vllm-ascend"):
+        try:
+            packages[dist] = metadata.version(dist)
+        except metadata.PackageNotFoundError:
+            packages[dist] = None
+    spec = util.find_spec("triton")
+    data = {"packages": packages, "python": sys.executable, "triton_file": spec.origin if spec else None,
+            "ascend_home": os.getenv("ASCEND_HOME_PATH"), "device": args.device}
+    for role, src in (("ascend", args.ascend_src), ("fsdp", args.fsdp_src)):
+        rev = subprocess.run(["git", "-C", src, "rev-parse", "HEAD"], capture_output=True, text=True)
+        data[role + "_src"] = str(src)
+        data[role + "_commit"] = rev.stdout.strip()
+    (args.out / "environment.json").write_text(json.dumps(data, indent=2))
+
+
+def kernel_map(src, out, operators=None):
+    with tempfile.TemporaryDirectory(dir=out.parent) as tmp:
+        pending = Path(tmp) / out.name
+        command = [sys.executable, Path(__file__).with_name("06_step5_kernel_map.py"),
+                   "--ascend-src", src, "--out", pending]
+        if operators:
+            command += ["--operators", operators]
+        rc = subprocess.run(command).returncode
+        if not rc:
+            pending.replace(out)
+        return rc
+
+
+def write_preflight_coverage(out, states):
+    with (out / "kernel-map.csv").open(newline="", encoding="utf-8") as stream:
+        sites = list(csv.DictReader(stream))
+    by_name = defaultdict(set)
+    passed = defaultdict(set)
+    attempted = defaultdict(set)
+    for site in sites:
+        symbol = site["symbol"]
+        by_name[symbol.split(".")[-1]].add(symbol)
+    for case, state in states.items():
+        for (_, kernel), complete in compile_records(out / "triton-cache" / case).items():
+            attempted[kernel].add(case)
+            if state == "PASS" and complete:
+                passed[kernel].add(case)
+    statuses = defaultdict(set)
+    with (out / "preflight-kernels.csv").open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(("symbol", "source_use", "launch_site", "status", "cases"))
+        for site in sites:
+            symbol = site["symbol"]
+            kernel = symbol.split(".")[-1]
+            use = site["source_use"]
+            if use != "launched":
+                status = use.upper()
+            elif kernel not in attempted:
+                status = "NO_PREFLIGHT_EVIDENCE"
+            elif len(by_name[kernel]) > 1:
+                status = "AMBIGUOUS_NAME"
+            elif kernel not in passed:
+                status = "NO_PASSING_CASE"
+            else:
+                status = "COMPILED_IN_PASSING_CASE"
+            statuses[status].add(symbol)
+            case_names = passed[kernel] if status == "COMPILED_IN_PASSING_CASE" else attempted.get(kernel, ())
+            writer.writerow((symbol, use, site["launch_site"], status, ",".join(sorted(case_names))))
+    print("Static kernel coverage (distinct symbols):", {s: len(v) for s, v in sorted(statuses.items())})
+
+
 def preflight(args):
     py = sys.executable
     checks = Path(__file__).resolve().parent
     fused = args.fsdp_src / "tests/step5_fused_ops"
     triton = args.ascend_src / "tests/e2e/nightly/single_node/ops/singlecard_ops/triton"
     cases = {
-        "gbsa_gbsag": [checks / "03_check_gbsa.py", "--expected-prefix", sys.prefix],
+        "gbsa_gbsag": [checks / "03_check_gbsa.py", "--expected-prefix", sys.prefix, "--kv-heads", "4",
+                       "--lengths", "7", "8", "9", "127", "128", "129"],
         "indexer_i64": [checks / "04_check_indexer_rope.py", "--ascend-src", args.ascend_src, "--positions", "int64"],
         "indexer_i32": [checks / "04_check_indexer_rope.py", "--ascend-src", args.ascend_src, "--positions", "int32"],
         "fsdp_norm_rope_grad": ["-m", "torch.distributed.run", "--standalone", "--nproc-per-node=1",
                                 fused / "check_fsdp_norm_rope_npu.py"],
         "swiglu_grad": ["-m", "pytest", "-k", "npu", fused / "test_step5_swiglu.py"],
+        "grouped_matmul_grad": ["-m", "pytest", "-k", "npu", str(args.fsdp_src /
+            "tests/unit_tests/ops/test_grouped_matmul_gradients.py") + "::test_grouped_matmul_requested_gradients"],
+        "dense_tnd_grad": ["-m", "pytest", str(args.fsdp_src / "tests/unit_tests/ops/test_step5_attention_tnd.py")
+                           + "::test_real_npu_dense_tnd_forward_backward"],
+        "gbsa_padded_batch_grad": ["-m", "pytest", str(args.fsdp_src / "tests/unit_tests/models/test_step5.py")
+                                   + "::test_step5_gbsa_batched_right_padding_matches_single_samples"],
+        "gbsa_packed_tnd_grad": ["-m", "pytest", "-k", "full", str(args.fsdp_src /
+            "tests/unit_tests/ops/test_gbsa_tnd.py") + "::test_npu_step5_tnd_matches_bsnd_gbsa"],
+        "moe_route_grad": ["-m", "pytest", checks / "test_step5_routing_npu.py"],
+        "rollout_moe_gate": ["-m", "pytest", checks / "test_rollout_moe_gate_npu.py"],
+        "rollout_swiglustep": ["-m", "pytest", triton / "test_swiglustep.py"],
         "decode_sparse_meta": ["-m", "pytest", triton / "test_step5_decode_sparse_meta.py"],
         "csa_decode_flush": ["-m", "pytest", args.out / "test_step5_csa_decode_flush.py"],
         "fused_add_norm": ["-m", "pytest", triton / "test_step5_fused_add_rms_norm.py"],
     }
+    for heads in (1, 2):
+        cases[f"gbsa_gbsag_kv{heads}"] = [checks / "03_check_gbsa.py", "--expected-prefix", sys.prefix,
+                                         "--kv-heads", str(heads), "--lengths", "7", "8", "9", "127", "128", "129"]
+    cases.update(dict.fromkeys(ROLLOUT_CASES))
+    for name in ("indexer_i64", "indexer_i32"):
+        if args.model_config:
+            cases[name] += ["--config", args.model_config]
+        cases[name] += ["--tp", str(args.tp)]
     if not args.ascend_src.is_dir() or not args.fsdp_src.is_dir():
         raise SystemExit("check --ascend-src and --fsdp-src")
     if args.device < 0:
@@ -45,10 +157,27 @@ def preflight(args):
             raise SystemExit("unknown case; choose from " + ", ".join(cases))
         cases = {args.only: cases[args.only]}
     args.out.mkdir(parents=True, exist_ok=False)
-    env = {**os.environ, "ASCEND_RT_VISIBLE_DEVICES": str(args.device)}
-    states = {}
+    record_environment(args)
+    map_status = 0
+    if not args.only:
+        map_status = kernel_map(args.ascend_src, args.out / "kernel-map.csv")
+    env = {**os.environ, "ASCEND_RT_VISIBLE_DEVICES": str(args.device),
+           "STEP5_CHECK_FSDP_SRC": str(args.fsdp_src), "STEP5_CHECK_ASCEND_SRC": str(args.ascend_src)}
+    states = dict.fromkeys(cases, "NOT_RUN")
+    write_states(args.out, states)
     for name, command in cases.items():
-        case_env = env
+        case_cache = args.out / "triton-cache" / name
+        case_cache.mkdir(parents=True)
+        case_env = {**env, "TRITON_CACHE_DIR": str(case_cache), "TRITON_STORE_BINARY_ONLY": "0"}
+        if name in ROLLOUT_CASES:
+            try:
+                command = prepare_rollout_case(name, args.ascend_src, args.out)
+            except (ValueError, OSError, SyntaxError) as exc:
+                states[name] = "INCOMPLETE"
+                write_states(args.out, states)
+                (args.out / (name + ".log")).write_text(str(exc))
+                print(f"INCOMPLETE {name}: {exc}", flush=True)
+                continue
         if name == "csa_decode_flush":
             # Keep the pinned numerical and slot-release assertions; the upstream
             # test still imports the step4 module although rollout invokes step5.
@@ -58,30 +187,16 @@ def preflight(args):
             src = original.read_text() if original.is_file() else ""
             if src.count(old_import) != 1:
                 states[name] = "INCOMPLETE"
+                write_states(args.out, states)
                 print(f"INCOMPLETE {name}: reference test changed or missing at {original}", flush=True)
                 continue
             command[-1].write_text(src.replace(old_import, new_import))
-            case_env = {**env, "PYTHONPATH": os.pathsep.join(filter(None, [str(args.ascend_src), env.get("PYTHONPATH")])),
-                        "TRITON_CACHE_DIR": str(args.out / "csa-triton-cache")}
-            packages = {}
-            for dist in ("torch", "torch-npu", "triton", "triton-ascend", "vllm-ascend"):
-                try:
-                    packages[dist] = metadata.version(dist)
-                except metadata.PackageNotFoundError:
-                    packages[dist] = None
-            spec = util.find_spec("triton")
-            sha = subprocess.run(["git", "-C", args.ascend_src, "rev-parse", "HEAD"],
-                                 capture_output=True, text=True)
-            (args.out / "environment.json").write_text(json.dumps({
-                "packages": packages, "python": py, "triton_file": spec.origin if spec else None,
-                "ascend_src": str(args.ascend_src), "ascend_commit": sha.stdout.strip(),
-                "ascend_home": env.get("ASCEND_HOME_PATH"), "device": args.device
-            }, indent=2))
+            case_env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(args.ascend_src), env.get("PYTHONPATH")]))
         log = args.out / (name + ".log")
         junit = args.out / (name + ".xml")
         pytest_case = command[:2] == ["-m", "pytest"]
         if pytest_case:
-            command += ["-q", "-rs", f"--junitxml={junit}"]
+            command += ["-q", "-rs", "--maxfail=0", f"--junitxml={junit}"]
         print(f"RUN {name} -> {log}", flush=True)
         with log.open("w") as stream:
             rc = subprocess.run([py, *command], env=case_env, stdout=stream, stderr=subprocess.STDOUT).returncode
@@ -93,10 +208,18 @@ def preflight(args):
                 tests = []
             if not tests or any(t.find("skipped") is not None for t in tests):
                 state = "INCOMPLETE"
+        if state == "PASS" and name in {"indexer_i32", "indexer_i64", "csa_decode_flush"}:
+            expected = "_csa_decode_stage_flush_kernel" if name == "csa_decode_flush" else "_indexer_qkz_norm_rope_kernel"
+            if not any(kernel == expected and built for (_, kernel), built in compile_records(case_cache).items()):
+                state = "INCOMPLETE"
+                print(f"No completed cold compilation evidence for {expected} in {case_cache}", flush=True)
         states[name] = state
+        write_states(args.out, states)
         print(f"{state} {name}", flush=True)
-    (args.out / "results.json").write_text(json.dumps(states, indent=2))
-    return 0 if all(s == "PASS" for s in states.values()) else 1
+    if not args.only and not map_status:
+        write_preflight_coverage(args.out, states)
+    print("Test group results:", dict(Counter(states.values())), "->", args.out / "results.json")
+    return int(bool(map_status) or any(s != "PASS" for s in states.values()))
 
 
 def database_rows(path):
@@ -142,6 +265,40 @@ def rollout_rows(kernel):
                         yield "hccl", device, name, "", "", 1
 
 
+def compare_compilations(run, preflight):
+    if not (preflight / "results.json").is_file():
+        print(f"Missing preflight results: {preflight}", file=sys.stderr)
+        return False
+    states = json.loads((preflight / "results.json").read_text())
+    passed = defaultdict(set)
+    names = defaultdict(set)
+    for case, state in states.items():
+        if state == "PASS":
+            for key, complete in compile_records(preflight / "triton-cache" / case).items():
+                if complete:
+                    passed[key].add(case)
+                    names[key[1]].add(case)
+    runtime = compile_records(run / "triton-cache")
+    totals = Counter()
+    path = run / "triton-coverage.csv"
+    with path.open("w", newline="") as out:
+        writer = csv.writer(out)
+        writer.writerow(("kernel", "cache_key", "runtime_build", "preflight_match", "preflight_cases"))
+        for key, complete in sorted(runtime.items(), key=lambda row: (row[0][1], row[0][0])):
+            digest, kernel = key
+            match = "EXACT_KEY" if key in passed else "NAME_ONLY" if kernel in names else "UNTESTED"
+            build = "COMPLETE" if complete else "PARTIAL_ARTIFACTS"
+            cases = passed.get(key, names.get(kernel, set()))
+            writer.writerow((kernel, digest, build, match, ",".join(sorted(cases))))
+            totals[build, match] += 1
+    for (build, match), count in sorted(totals.items()):
+        print(f"Triton {build} {match}: {count}")
+    if not runtime:
+        print("NO_CACHE_EVIDENCE: run has no recorded Triton builds", file=sys.stderr)
+    print("Triton specialization report:", path)
+    return bool(runtime) and totals["COMPLETE", "EXACT_KEY"] == len(runtime)
+
+
 def inventory(args):
     run = args.run_dir
     if not run.is_dir():
@@ -180,6 +337,10 @@ def inventory(args):
     for message in errors:
         print(message, file=sys.stderr)
     print("PARTIAL" if errors else "STEP_TRACED", run / "operators.csv")
+    if args.ascend_src and kernel_map(args.ascend_src, run / "kernel-map-vs-profile.csv", run / "operators.csv"):
+        errors.append("failed to match source kernels to observed profiler records")
+    if args.preflight_dir and not compare_compilations(run, args.preflight_dir):
+        errors.append("unmatched or missing Triton compilation evidence")
     return int(bool(errors))
 
 
@@ -191,9 +352,13 @@ def main():
     one.add_argument("--fsdp-src", type=absolute, required=True)
     one.add_argument("--out", type=absolute, required=True)
     one.add_argument("--device", type=int, required=True)
+    one.add_argument("--model-config", type=absolute, help="use this config.json for indexer layout and head counts")
+    one.add_argument("--tp", type=int, default=8, help="rollout TP used to derive indexer geometry")
     one.add_argument("--only", help="run just one case, e.g. csa_decode_flush")
     report = modes.add_parser("inventory")
     report.add_argument("--run-dir", type=absolute, required=True)
+    report.add_argument("--ascend-src", type=absolute, help="match rollout profile names against the pinned sources")
+    report.add_argument("--preflight-dir", type=absolute, help="compare observed Triton compilation keys to successful preflight cases")
     args = cli.parse_args()
     return preflight(args) if args.mode == "preflight" else inventory(args)
 

@@ -168,18 +168,24 @@ python "$INDEXER_CHECK" --ascend-src "$ASCEND_SRC" --positions int32 --lengths 1
 python -m pytest -q -rs "$ASCEND_SRC/tests/e2e/nightly/single_node/ops/singlecard_ops/triton/test_step5_fused_add_rms_norm.py"
 ```
 
-当前 16 专家模型在 TP8 下每个 rank 的 indexer 有 4 个 Q 头、1 个 K 头，head dim 256、RoPE dim 32。预检覆盖 BF16、非连续 Q/K/Z 分片和两种位置索引。仓内原有 indexer 测试只传 int32。即使 int32 通过，只要 int64 失败，原始 rollout 路径仍可能失败。检查结果以实际执行的 PASS 为准，跳过的测试不算通过。随后在原 16 卡终端执行一次 `smoke`，覆盖 TP 通信和真正的 prefill/decode 路径；单卡小样本不能证明所有图和形状都可用。
+当前 16 专家模型在 TP8 下每个 rank 的 indexer 有 4 个 Q 头、1 个 K 头，head dim 256、RoPE dim 32。旧预检将独立的 Q/K/Z 切片传给内核，行跨度为 1536 个元素。rollout 从包含主 QKV、indexer Q/K/Z 和 gate 的同一投影中切片，行跨度为 3464。int64 通过只对实际测试的布局、长度、编译器和特化有效。上面两条命令用于手工缩小长度范围。完整排查请用下节默认矩阵。
 
 ### 测试实际使用的算子
 
-**第一步：独立单卡预检。** 在 A3 已激活的环境指定一张空闲卡、两个源码目录和新的输出目录。检查 GBSA/GBSAG 前反向、融合 indexer 的 int64/int32 两种输入、FSDP Norm/RoPE 前反向、SwiGLU 梯度、decode 稀疏元数据和 rollout 融合残差 RMSNorm。每组独立进程，失败后继续下一组；查看 `results.json` 和各组日志。pytest 跳过用例会标为 INCOMPLETE。
+**第一步，在 A3 一张空闲卡上跑完整预检。** `MODEL` 为本次 RL 使用的 HF 模型绝对路径。在已激活的环境运行下面的命令，按本机情况填写卡号和新的输出目录。脚本会先从当前 vllm-ascend 源码枚举 Step5 自定义 Triton 内核和启动点，再分组执行数值和编译检查。一组失败会继续尝试其他组。单卡终端中的可见卡设置和 16 卡作业终端应各自独立。
 
 ```bash
 export OP_CHECK='/mnt/share/z00988734/workspace/step5-a3/Step5/scripts/checks/05_rl_ops.py'
 export ASCEND_SRC='/mnt/share/z00988734/workspace/step5-a3/Step5/src/vllm-ascend'
 export FSDP_SRC='/mnt/share/z00988734/workspace/step5-a3/Step5/src/FSDPTurbo'
-python "$OP_CHECK" preflight --device 0 --ascend-src "$ASCEND_SRC" --fsdp-src "$FSDP_SRC" --out '/你的路径/a3-single-op-check-001'
+export OP_OUT='/你的路径/a3-single-op-check-002'
+python "$OP_CHECK" preflight --device 0 --ascend-src "$ASCEND_SRC" --fsdp-src "$FSDP_SRC" --model-config "$MODEL/config.json" --tp 8 --out "$OP_OUT"
 ```
+
+* 训练侧包含 GBSA/GBSAG 前反向（1、2、4 个 KV 头，7/8/9 和 127/128/129 token），带 padding 和 packed TND 的长序列 GBSA、稠密/滑窗 TND 前反向、grouped matmul 梯度、Norm/RoPE 和 SwiGLU 梯度。MoE 用 16 专家、top-8 检查 actor 路由权重、专家 ID 和梯度，覆盖原生选择、全部 replay 和混合 replay。
+* rollout 侧检查融合 indexer、主 attention 的 Q/K Norm + RoPE、paged indexer logits、稀疏 decode 元数据、CSA prefill/decode 与交接、summary 状态、融合残差 RMSNorm 和 SwiGLU。单独调用 A3 的 MoE gating 实现，用 NumPy 参考值校验 16 专家、top-8、scale 3 的专家 ID 和权重。每组使用新的 Triton 缓存。int64 和 int32 独立运行，indexer 和 CSA flush 还要求找到对应的完整编译产物。
+* indexer 默认跑 1、8、32、33、129、1024、1152、3072 个 token，在 33 token 上还逐个调用固定源码注册的 11 个候选分块并与参考输出比较。日志分别记录生产入口和各个候选的结果。若只有某个候选失败，需要结合真实运行的编译信息判断这次 rollout 是否会选中它。单卡 eager 测试不经过多卡 rollout 的图捕获和回放。
+* `results.json` 随每组完成更新。跳过的 pytest 用例计为 `INCOMPLETE`，尚未处理的组显示 `NOT_RUN`。`preflight-kernels.csv` 把每个发现的启动点与本次单卡检查对照。优先看 `NO_PREFLIGHT_EVIDENCE`、`NO_PASSING_CASE`、`AMBIGUOUS_NAME`。`COMPILED_IN_PASSING_CASE` 代表在通过组的缓存里见过该名称；同名可能有多种特化。`kernel-map.csv` 给出源码位置、启动参数、constexpr 以及静态可解析的测试调用。
 
 **单独定位 CSA decode 编译器退出。** `AutoBlockify disabled ... atomic operations` 表示该优化已被编译器关闭。`bishengir-compile ... --target=Ascend910_9382 ... SIGABRT` 表示编译器子进程异常退出。多进程日志交错，排查时同时保留出错 worker 的完整 traceback 和编译器 stderr。若怀疑 `_csa_decode_stage_flush_kernel`，用空闲卡执行：
 
@@ -198,11 +204,17 @@ cat "$CSA_OUT/csa_decode_flush.log"
 export RUN_DIR='/你的路径/a3-rl-op-coverage-001'
 export RAY_TMPDIR='/tmp/s5-op-001'
 export OP_CHECK='/mnt/share/z00988734/workspace/step5-a3/Step5/scripts/checks/05_rl_ops.py'
-# 已知 A3 融合 indexer 的 int64 用例失败时，用分步路径继续覆盖后续算子
-VLLM_STEP4_FUSE_INDEXER_NORM_ROPE=0 bash "$RL_SCRIPT" ops
-python "$OP_CHECK" inventory --run-dir "$RUN_DIR"
+export ASCEND_SRC='/mnt/share/z00988734/workspace/step5-a3/Step5/src/vllm-ascend'
+export OP_OUT='/你的路径/a3-single-op-check-002'
+# 测融合基线时显式启用，与单卡 indexer 对照；训练失败也继续生成报告。
+VLLM_STEP4_FUSE_INDEXER_NORM_ROPE=1 bash "$RL_SCRIPT" ops
+python "$OP_CHECK" inventory --run-dir "$RUN_DIR" --ascend-src "$ASCEND_SRC" --preflight-dir "$OP_OUT"
 ```
 
-若要测试原融合性能路径，在**新目录**用 `VLLM_STEP4_FUSE_INDEXER_NORM_ROPE=1 bash "$RL_SCRIPT" ops`。两次 inventory 应分别保留。要覆盖视觉路径，训练 batch 必须实际包含图片；要覆盖长序列、不同序列边界和 decode，请用相应样本，确认 rollout 输出确实生成了多个 token。权重同步、反向、优化器、TP/EP 通信随真实单步执行；被配置关闭的 DeepEP、batch invariant，以及该步未触发的分支不会获得覆盖。初始化和图编译失败会出现在 `train.log`，算子级 profiler 的时间窗口为训练第 1 步。
+若融合 indexer 阻断整步，另选新的 `RUN_DIR` 和 `RAY_TMPDIR`，用 `VLLM_STEP4_FUSE_INDEXER_NORM_ROPE=0 bash "$RL_SCRIPT" ops` 跑分步路径，并对该次运行再执行 inventory。分别保留两次报告。要覆盖视觉路径，训练 batch 必须实际包含图片。要覆盖长序列、不同序列边界和 decode，请用相应样本并确认 rollout 实际生成了多个 token。权重同步、反向、优化器和 TP/EP 通信随真实单步执行。默认关闭的 DeepEP、batch invariant 和样本未触发的分支不计入覆盖。
 
 **读取结果。** `operators.csv` 按 actor/rollout、host/kernel/HCCL、设备和算子列出观察次数；shape、dtype 在 profiler 提供时记录。原始记录分别在 `profiles/actor` 和 `profiles/rollout`。`STEP_TRACED` 要求 trainer 正常退出、日志有第 1 步指标、两侧均有 16 个设备的 kernel，以及 host、HCCL 记录。缺文件、中途失败或只采到一侧会输出 `PARTIAL` 并保留已观察结果。profiler 的执行记录不能替代逐算子的数值参考测试。
+
+`ops` 给本次作业及 Ray worker 设置独立的 `RUN_DIR/triton-cache`。`triton-coverage.csv` 比较本次作业与同一 A3 环境单卡预检的编译键。`COMPLETE + EXACT_KEY` 表示同一特化已在通过的用例组中编译过。`NAME_ONLY` 表示同名但编译键不同，`UNTESTED` 表示通过组未见该内核，`PARTIAL_ARTIFACTS` 表示现场只留下部分文件。编译中止可能早于首次写缓存，此时还要看失败 worker 的完整 traceback。`NO_CACHE_EVIDENCE` 表示无可比较产物。有缺口时 inventory 以非零状态退出并保留 CSV。算子执行以 profiler 为准，缓存可能包括 autotune 尝试的候选。A5 和 A3 的编译目标不同，编译键应在同一台 A3 上对照。
+
+`kernel-map-vs-profile.csv` 把源码内核映射到 rollout 的设备记录。同名歧义、未解析调用和未匹配项都会保留。静态清单仅覆盖当前仓内 `vllm_ascend.models.step5` 的 Triton 定义；外部 CANN 算子和 HCCL 通过数值用例或真实单步采集观察。本模式包含冷编译与 profiler 开销，性能对比使用正常的 `train` 模式。

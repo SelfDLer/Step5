@@ -107,8 +107,12 @@ export VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY=1 STEP5_RANK0_EXPERT_INIT=1 STE
 mkdir -p -- "$RUN_DIR"
 RUN_DIR=$(realpath -- "$RUN_DIR")
 if [[ $mode != config && -e "$RUN_DIR/train.log" ]]; then echo "Choose a fresh RUN_DIR; train.log exists in $RUN_DIR" >&2; exit 2; fi
-if [[ $mode == ops && ( -e "$RUN_DIR/profiles" || -e "$RUN_DIR/ops-trainer-exited-ok" ) ]]; then
+if [[ $mode == ops && ( -e "$RUN_DIR/profiles" || -e "$RUN_DIR/ops-trainer-exited-ok" || -e "$RUN_DIR/triton-cache" ) ]]; then
     echo "Choose a fresh RUN_DIR for the operator inventory." >&2; exit 2
+fi
+if [[ $mode == ops ]]; then
+    export TRITON_CACHE_DIR="$RUN_DIR/triton-cache" TRITON_STORE_BINARY_ONLY=0
+    mkdir -- "$TRITON_CACHE_DIR"
 fi
 MODEL=$(python -S "$BYTELEVEL_HELPER" "$MODEL" "$RUN_DIR")
 if [[ $mode != config ]]; then mkdir -p -- "$RAY_TMPDIR"; export RAY_TMPDIR; fi
@@ -120,6 +124,10 @@ hq() {
     printf '"%s"' "$value"
 }
 worker_args=()
+if [[ $mode == ops ]]; then
+    worker_args+=("++ray_kwargs.ray_init.runtime_env.env_vars.TRITON_CACHE_DIR=$(hq "$TRITON_CACHE_DIR")"
+                  "++ray_kwargs.ray_init.runtime_env.env_vars.TRITON_STORE_BINARY_ONLY=$(hq "$TRITON_STORE_BINARY_ONLY")")
+fi
 for name in PYTHONPATH RL_INSIGHT_SERVER_URL RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES VLLM_WORKER_MULTIPROC_METHOD VLLM_STEP4_ENABLE_FA3 HCCL_OP_EXPANSION_MODE \
     VLLM_STEP4_FUSE_INDEXER_NORM_ROPE STEP5_ROLLOUT_HCCL_MODE VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY STEP5_RANK0_EXPERT_INIT \
     STEP5_STREAM_EXPERT_WEIGHTS STEP5_EFSDP_CAST_FORWARD_INPUTS VERL_FULL_DETERMINISM VLLM_BATCH_INVARIANT; do
