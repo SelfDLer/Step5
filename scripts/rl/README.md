@@ -143,3 +143,29 @@ export PYTHONNOUSERSITE=1
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-4}
 export HCCL_CONNECT_TIMEOUT=${HCCL_CONNECT_TIMEOUT:-1800}
 ```
+
+### A3 单卡预检与 indexer Norm + RoPE 编译错误
+
+若 rollout 日志报 `_indexer_qkz_norm_rope_kernel`、`unsupported BlockData producer 'arith.trunci'`，本次失败点是 Triton 编译 int64 位置索引转 int32 的指令。当前 `smoke` 默认给 rollout 设置 `VLLM_STEP4_FUSE_INDEXER_NORM_ROPE=0`，改用模型自带的分步 norm 和 RoPE。训练侧的融合设置、GBSA 和并行配置沿用原值。`train` 默认沿用原融合路径，方便保留性能基线。若要用备用路径测性能，请记录这个差异，并在两端指定相同开关。
+
+若暂用旧脚本，在已激活的环境中保留之前的模型和数据路径，结束旧作业并用新目录重跑：
+
+```bash
+export RUN_DIR='/你的路径/step5-rl-smoke-005'
+export RAY_TMPDIR='/tmp/s5-005'
+VLLM_STEP4_FUSE_INDEXER_NORM_ROPE=0 bash "$RL_SCRIPT" smoke '++ray_kwargs.ray_init.runtime_env.env_vars.VLLM_STEP4_FUSE_INDEXER_NORM_ROPE="0"'
+```
+
+单卡预检在独立终端执行。指定一张空闲卡、检查脚本和 vllm-ascend 仓库的绝对路径。该检查直接执行融合内核，与 PyTorch 参考比较 Q/K，并检查 Z 原样传递。它不需要模型权重、数据或 Ray。
+
+```bash
+export ASCEND_RT_VISIBLE_DEVICES=0
+export INDEXER_CHECK='/mnt/share/z00988734/workspace/step5-a3/Step5/scripts/checks/04_check_indexer_rope.py'
+export ASCEND_SRC='/mnt/share/z00988734/workspace/step5-a3/Step5/src/vllm-ascend'
+python "$INDEXER_CHECK" --ascend-src "$ASCEND_SRC" --positions int64 --lengths 1 33 129
+# 独立运行 int32 对照，判断是否与索引类型相关
+python "$INDEXER_CHECK" --ascend-src "$ASCEND_SRC" --positions int32 --lengths 1 33 129
+python -m pytest -q -rs "$ASCEND_SRC/tests/e2e/nightly/single_node/ops/singlecard_ops/triton/test_step5_fused_add_rms_norm.py"
+```
+
+当前 16 专家模型在 TP8 下每个 rank 的 indexer 有 4 个 Q 头、1 个 K 头，head dim 256、RoPE dim 32。预检覆盖 BF16、非连续 Q/K/Z 分片和两种位置索引。仓内原有 indexer 测试只传 int32。即使 int32 通过，只要 int64 失败，原始 rollout 路径仍可能失败。检查结果以实际执行的 PASS 为准，跳过的测试不算通过。随后在原 16 卡终端执行一次 `smoke`，覆盖 TP 通信和真正的 prefill/decode 路径；单卡小样本不能证明所有图和形状都可用。
