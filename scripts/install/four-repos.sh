@@ -60,7 +60,7 @@ deps)
         accelerate codetiming 'datasets==4.4.1' dill hydra-core peft 'pyarrow==21.0.0' pylatexenc \
         'ray[default]==2.48.0' torchdata 'tensordict==0.10.0' wandb tensorboard \
         'TransferQueue==0.1.11' concurrent-log-handler attrs googleapis-common-protos \
-        pyelftools pytest-xdist expecttest 'qwen-vl-utils==0.0.14'
+        pyelftools pytest-xdist expecttest 'qwen-vl-utils==0.0.14' 'mathruler==0.1.0'
     ;;
 triton)
     # Overlay the Ascend implementation after resolving its dependencies. Match
@@ -180,7 +180,9 @@ import importlib
 from pathlib import Path
 import torch_npu
 from qwen_vl_utils import fetch_image, fetch_video, process_vision_info
+from verl.utils.reward_score.geo3k import acc_reward
 from vllm.platforms import current_platform
+assert acc_reward(r"\boxed{3}", "3") == 1.0
 if current_platform.device_type != 'npu':
     raise RuntimeError(f'vLLM selected {current_platform.device_type}')
 for repo, module in [('vllm','vllm._rust_tool_parser'),

@@ -26,6 +26,13 @@ python -m pip install 'qwen-vl-utils==0.0.14'
 python -c 'from qwen_vl_utils import fetch_image, fetch_video, process_vision_info; from importlib.metadata import version; print(version("qwen-vl-utils"))'
 ```
 
+Geo3K reward 使用 `mathruler==0.1.0` 判分。旧环境可用 `python -m pip show mathruler` 检查；若缺失，在当前 Step5 环境补装，并用 verl 的实际判分函数验证。第二条命令应打印 `1.0`。
+
+```bash
+python -m pip install 'mathruler==0.1.0'
+python -c 'from verl.utils.reward_score.geo3k import acc_reward; print(acc_reward(r"\boxed{3}", "3"))'
+```
+
 ```bash
 export RL_SCRIPT='/mnt/share/z00988734/workspace/step5-a3/Step5/scripts/rl/run_rl_rmpad_a3_fp32.sh'
 export BYTELEVEL_HELPER='/mnt/share/z00988734/workspace/step5-a3/Step5/reference/a5/scripts/rl_bytelevel_model.py'
