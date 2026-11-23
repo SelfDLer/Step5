@@ -257,7 +257,6 @@ trainer_args=(
     "trainer.default_local_dir=$(hq "$RUN_DIR/checkpoints")"
     trainer.project_name=step5-rl
     "trainer.experiment_name=$(basename "$RUN_DIR")"
-    ray_kwargs.ray_init.num_cpus=32
     "${worker_args[@]}"
     ++ray_kwargs.ray_init.object_store_memory=1073741824
     transfer_queue.backend.SimpleStorage.total_storage_size=1024

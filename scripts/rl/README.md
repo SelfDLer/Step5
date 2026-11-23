@@ -45,3 +45,17 @@ bash "$RL_SCRIPT" smoke
 查看 `RUN_DIR` 中的 `config.txt` 和 `train.log`，以第 1 个训练 step 完成并正常退出为通过。随机模型的 reward 或 advantage 可能为零。
 
 同一 RL 脚本也支持 `config`（仅导出性能基线配置）和 `train`（按原性能基线训练，默认 100 步）。
+
+### Ray 等待 16 NPU、48 CPU
+
+verl 为每张 NPU 申请 3 个 Ray 逻辑 CPU，单机 16 卡需要同时放置 16 个 bundle，共 48 个 CPU。其他 Ray 进程还可能需要 CPU。旧脚本把整个节点限制为 32 个逻辑 CPU。当前脚本使用 Ray 自动检测的节点 CPU 数量。
+
+若旧作业仍在等待，在同一作业环境的另一终端运行 `ray status`，查看节点的 CPU、NPU 总量、已用量和待调度请求。结束自己的前台作业（Ctrl+C），在原终端使用新的输出目录和 Ray 临时目录重跑。以下命令也适用于旧脚本：
+
+```bash
+export RUN_DIR='/你的路径/step5-rl-smoke-002'
+export RAY_TMPDIR='/tmp/s5-002'
+bash "$RL_SCRIPT" smoke ray_kwargs.ray_init.num_cpus=null
+```
+
+若自动检测后单节点仍无法同时提供 16 个空闲 NPU 和 48 个空闲逻辑 CPU，请检查作业或容器的 CPU 配额、NPU 分配和其他任务占用；在资源分配足够后重跑。
