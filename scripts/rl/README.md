@@ -87,4 +87,4 @@ PY
 ```
 
 * 若 `verl NPU: False`，先看显式导入是否报缺少 CANN 动态库，并确认 Conda、CANN 和可见卡列表。若设置了 `TORCH_DEVICE_BACKEND_AUTOLOAD=0`，执行 `unset TORCH_DEVICE_BACKEND_AUTOLOAD`，再用新的 Python 进程复查。单机 16 卡启动前应看到 `verl NPU: True` 和 `count: 16`。
-* 若主进程检查通过，可用 `python -P -c 'import verl.third_party.vllm as v; print(v.__file__)'` 验证相同导入。如果 traceback 标有 Ray actor 名称和 PID，且错误只在 worker 出现，检查该角色的设备可见性。对于本脚本的单机独占 16 卡作业，可按 verl 的 NPU FSDPTurbo 示例，设置 `export RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES=1`，使 Ray 保留启动器的可见卡列表；换新的 `RUN_DIR` 和 `RAY_TMPDIR` 后重启。
+* 若主进程检查通过，可用 `python -P -c 'import verl.third_party.vllm as v; print(v.__file__)'` 验证相同导入。若只有 Ray worker 报错，旧基线的共享激活脚本设置了 `RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES=1`，使 Ray 保留启动器的可见卡列表。当前 A3 单机独占 16 卡入口已设置此变量并传给 worker。使用更新后的脚本时，结束旧作业、换新的 `RUN_DIR` 和 `RAY_TMPDIR` 后重跑；使用旧脚本时，在启动前手动执行 `export RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES=1`。

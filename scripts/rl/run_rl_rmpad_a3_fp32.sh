@@ -31,6 +31,8 @@ EXPERT_FSDP_SIZE=$((N_GPUS / EP_SIZE))
 export STEP5_EP_DISPATCHER=custom_native_eager_fused_forward
 export STEP5_USE_TRITON_MC2_PERMUTE=false
 export ASCEND_RT_VISIBLE_DEVICES=${ASCEND_RT_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15}
+# Match the working single-node runtime: Ray workers inherit the node's NPU list.
+export RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES=1
 python - "$MODEL/config.json" "$EP_SIZE" "$ROLLOUT_TP_SIZE" <<'PY'
 import json, sys
 with open(sys.argv[1]) as stream:
