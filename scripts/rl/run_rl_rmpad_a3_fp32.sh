@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Step5 GRPO, single A3 node (16 x 64 GB). Run with the verified Conda/CANN environment.
 # Required: MODEL (local HF directory), TRAIN_FILES and VAL_FILES (one local Parquet each).
-# bash scripts/rl/run_rl_rmpad_a3_fp32.sh {config|train} [Hydra overrides ...]
+# bash scripts/rl/run_rl_rmpad_a3_fp32.sh {smoke|config|train} [Hydra overrides ...]
 # Uses the A5 GRPO reward manager (Geo3K uses mathruler==0.1.0).
 # For performance comparisons use the same model, samples, steps, reward and logger.
 set -euo pipefail
-case ${1:-} in config|train) mode=$1; shift ;; *) echo 'Usage: MODEL=... TRAIN_FILES=... VAL_FILES=... bash scripts/rl/run_rl_rmpad_a3_fp32.sh {config|train} [overrides ...]' >&2; exit 2 ;; esac
+case ${1:-} in smoke|config|train) mode=$1; shift ;; *) echo 'Usage: MODEL=... TRAIN_FILES=... VAL_FILES=... bash scripts/rl/run_rl_rmpad_a3_fp32.sh {smoke|config|train} [overrides ...]' >&2; exit 2 ;; esac
 root=$(cd -- "$(dirname -- "$0")/../.." && pwd -P)
 helpers=$root/reference/a5/scripts
 : "${MODEL:?Set MODEL to the Step5 HF checkpoint directory}"
@@ -40,11 +40,18 @@ for key, divisor in [('moe_num_experts', ep), ('num_attention_heads', tp), ('num
     if isinstance(n, int) and n % divisor:
         raise SystemExit(f'{key}={n} is incompatible with parallel size {divisor}')
 PY
-if [[ $mode == train ]]; then
+if [[ $mode != config ]]; then
     python -c 'import torch, torch_npu; n = torch.npu.device_count(); assert n == 16, f"expected 16 visible NPUs, got {n}"'
 fi
 
 # ---- A5 sft100 FP32 run settings ----
+if [[ $mode == smoke ]]; then
+    TRAIN_BATCH_SIZE=16 PPO_MINI_BATCH_SIZE=16 ROLLOUT_N=2
+    MICRO_BATCH_SIZE=1 LOG_PROB_MICRO_BATCH_SIZE=1
+    MAX_PROMPT_LENGTH=1024 MAX_RESPONSE_LENGTH=128
+    ACTOR_MAX_TOKEN_LEN_PER_GPU=1152 LOG_PROB_MAX_TOKEN_LEN_PER_GPU=1152
+    TOTAL_STEPS=1 TEST_FREQ=-1 SAVE_FREQ=-1
+fi
 TRAIN_BATCH_SIZE=${TRAIN_BATCH_SIZE:-32}
 PPO_MINI_BATCH_SIZE=${PPO_MINI_BATCH_SIZE:-16}
 MICRO_BATCH_SIZE=${MICRO_BATCH_SIZE:-1}
@@ -79,9 +86,9 @@ export VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY=1 STEP5_RANK0_EXPERT_INIT=1 STE
 RUN_DIR=${RUN_DIR:-$root/outputs/step5-a3-fp32-$(date +%Y%m%d-%H%M%S)-$$}
 mkdir -p -- "$RUN_DIR"
 RUN_DIR=$(realpath -- "$RUN_DIR")
-if [[ $mode == train && -e "$RUN_DIR/train.log" ]]; then echo "Choose a fresh RUN_DIR; train.log exists in $RUN_DIR" >&2; exit 2; fi
+if [[ $mode != config && -e "$RUN_DIR/train.log" ]]; then echo "Choose a fresh RUN_DIR; train.log exists in $RUN_DIR" >&2; exit 2; fi
 MODEL=$(python -S "$helpers/rl_bytelevel_model.py" "$MODEL" "$RUN_DIR")
-if [[ $mode == train ]]; then RAY_TMPDIR=$(mktemp -d /tmp/s5rl-XXXXXX); export RAY_TMPDIR; fi
+if [[ $mode != config ]]; then RAY_TMPDIR=$(mktemp -d /tmp/s5rl-XXXXXX); export RAY_TMPDIR; fi
 # Quote string values for Hydra. Runtime env_vars must remain strings (e.g. "0").
 hq() {
     local value=$1
@@ -264,8 +271,9 @@ printf 'A3: %s NPUs, actor FSDP=%s EP=%s expert-FSDP=%s, rollout TP=%s (%s repli
 printf '%q ' "${command[@]}" > "$RUN_DIR/command.sh"
 printf '\n' >> "$RUN_DIR/command.sh"
 echo "Artifacts: $RUN_DIR"
-if [[ $mode == config ]]; then
+if [[ $mode != train ]]; then
     "${command[@]}" --cfg job --resolve > "$RUN_DIR/config.txt" 2> "$RUN_DIR/config.log" || { cat "$RUN_DIR/config.log" >&2; exit 1; }
-else
+fi
+if [[ $mode != config ]]; then
     "${command[@]}" 2>&1 | tee "$RUN_DIR/train.log"
 fi

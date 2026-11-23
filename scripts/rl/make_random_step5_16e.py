@@ -56,7 +56,7 @@ def write_shard(path, tensors, seed):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--assets", required=True, type=Path, help="matching config and tokenizer directory")
+    parser.add_argument("--assets", required=True, type=Path, help="Step5 HF config/tokenizer directory; weights need not be downloaded")
     parser.add_argument("--output", required=True, type=Path, help="new checkpoint directory")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--plan", action="store_true", help="validate layout and print size only")
@@ -64,14 +64,36 @@ def main():
     assets = args.assets.resolve()
     dest = args.output.resolve()
     layout = json.loads(Path(__file__).with_name("step5_16e_layout.json").read_text())
-    config = json.loads((assets / "config.json").read_text())
+    target_config = Path(__file__).with_name("step5_16e_config.json")
+    config = json.loads(target_config.read_text())
     digest = hashlib.sha256(json.dumps(config, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     if digest != layout["config_sha256"]:
-        parser.error("config.json differs from the sft100 16-expert baseline")
+        parser.error("bundled 16-expert config and tensor layout do not match")
     required = ("config.json", "tokenizer.json", "tokenizer_config.json")
-    for file in required:
-        if not (assets / file).is_file():
-            parser.error(f"missing {assets / file}")
+    def read_asset(name):
+        try:
+            return json.loads((assets / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            parser.error(f"missing or incomplete {assets / name}: {exc}")
+
+    source = read_asset("config.json")
+    tokenizer = read_asset("tokenizer.json")
+    settings = read_asset("tokenizer_config.json")
+    if source.get("model_type") != config["model_type"]:
+        parser.error(f"expected a {config['model_type']} HF config in --assets")
+    vocab_size = config["text_config"]["vocab_size"]
+    if source.get("text_config", {}).get("vocab_size") != vocab_size:
+        parser.error(f"the 16-expert embedding table expects vocab_size={vocab_size}")
+    if source.get("image_token_id") != config.get("image_token_id"):
+        parser.error("image_token_id differs from the target Step5 config")
+    vocab = tokenizer.get("model", {}).get("vocab")
+    if not isinstance(vocab, dict) or not vocab:
+        parser.error("expected a complete Step5 tokenizer.json with a BPE vocabulary")
+    ids = [*vocab.values(), *(t["id"] for t in tokenizer.get("added_tokens", []))]
+    if min(ids) < 0 or max(ids) >= vocab_size:
+        parser.error("tokenizer contains IDs outside the target embedding table")
+    if not settings.get("chat_template") and not (assets / "chat_template.jinja").is_file():
+        print("Note: no chat template found; check the tokenizer assets before RL.")
     shards = defaultdict(list)
     weight_map = {}
     total = 0
@@ -92,7 +114,8 @@ def main():
     with TemporaryDirectory(prefix=".step5-random-", dir=dest.parent) as tmp:
         stage = Path(tmp) / "model"
         stage.mkdir()
-        for file in (*required, "chat_template.jinja", "generation_config.json", "special_tokens_map.json",
+        shutil.copyfile(target_config, stage / "config.json")
+        for file in (*required[1:], "chat_template.jinja", "generation_config.json", "special_tokens_map.json",
                      "added_tokens.json", "preprocessor_config.json", "processor_config.json"):
             if (assets / file).is_file():
                 shutil.copyfile(assets / file, stage / file)
