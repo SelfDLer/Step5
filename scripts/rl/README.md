@@ -88,3 +88,21 @@ PY
 
 * 若 `verl NPU: False`，先看显式导入是否报缺少 CANN 动态库，并确认 Conda、CANN 和可见卡列表。若设置了 `TORCH_DEVICE_BACKEND_AUTOLOAD=0`，执行 `unset TORCH_DEVICE_BACKEND_AUTOLOAD`，再用新的 Python 进程复查。单机 16 卡启动前应看到 `verl NPU: True` 和 `count: 16`。
 * 若主进程检查通过，可用 `python -P -c 'import verl.third_party.vllm as v; print(v.__file__)'` 验证相同导入。若只有 Ray worker 报错，旧基线的共享激活脚本设置了 `RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES=1`，使 Ray 保留启动器的可见卡列表。当前 A3 单机独占 16 卡入口已设置此变量并传给 worker。使用更新后的脚本时，结束旧作业、换新的 `RUN_DIR` 和 `RAY_TMPDIR` 后重跑；使用旧脚本时，在启动前手动执行 `export RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES=1`。
+
+### Rollout worker 报错缺少 `flash_attn_npu_3`
+
+固定版本的 vllm-ascend 在 `VLLM_STEP4_ENABLE_FA3` 未设置时默认取 `1`，初始化 attention backend 时强制检查 `flash_attn_npu_3`。基线设置为 `0`，由 vllm-ascend 按模型和硬件选择后端。更新后的启动器会在本机和 Ray worker 中显式设置 `0`。
+
+保留已有的 `MODEL` 和数据路径，结束上一次作业，用新的绝对路径重跑：
+
+```bash
+export RUN_DIR='/你的路径/step5-rl-smoke-004'
+export RAY_TMPDIR='/tmp/s5-004'
+bash "$RL_SCRIPT" smoke
+```
+
+若暂时使用旧脚本，请将最后一行换成下面这条，同时指定启动进程与 Ray worker 的值：
+
+```bash
+VLLM_STEP4_ENABLE_FA3=0 bash "$RL_SCRIPT" smoke '++ray_kwargs.ray_init.runtime_env.env_vars.VLLM_STEP4_ENABLE_FA3="0"'
+```

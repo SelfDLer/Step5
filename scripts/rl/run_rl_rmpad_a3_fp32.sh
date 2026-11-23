@@ -33,6 +33,8 @@ export STEP5_USE_TRITON_MC2_PERMUTE=false
 export ASCEND_RT_VISIBLE_DEVICES=${ASCEND_RT_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15}
 # Match the working single-node runtime: Ray workers inherit the node's NPU list.
 export RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES=1
+# The baseline uses normal Ascend attention backend selection on rollout.
+export VLLM_STEP4_ENABLE_FA3=0
 python - "$MODEL/config.json" "$EP_SIZE" "$ROLLOUT_TP_SIZE" <<'PY'
 import json, sys
 with open(sys.argv[1]) as stream:
@@ -111,7 +113,7 @@ hq() {
     printf '"%s"' "$value"
 }
 worker_args=()
-for name in PYTHONPATH RL_INSIGHT_SERVER_URL RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES VLLM_WORKER_MULTIPROC_METHOD HCCL_OP_EXPANSION_MODE \
+for name in PYTHONPATH RL_INSIGHT_SERVER_URL RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES VLLM_WORKER_MULTIPROC_METHOD VLLM_STEP4_ENABLE_FA3 HCCL_OP_EXPANSION_MODE \
     STEP5_ROLLOUT_HCCL_MODE VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY STEP5_RANK0_EXPERT_INIT \
     STEP5_STREAM_EXPERT_WEIGHTS STEP5_EFSDP_CAST_FORWARD_INPUTS VERL_FULL_DETERMINISM VLLM_BATCH_INVARIANT; do
     if [[ -n ${!name:-} ]]; then worker_args+=("++ray_kwargs.ray_init.runtime_env.env_vars.$name=$(hq "${!name}")"); fi
