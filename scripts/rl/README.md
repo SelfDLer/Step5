@@ -106,3 +106,40 @@ bash "$RL_SCRIPT" smoke
 ```bash
 VLLM_STEP4_ENABLE_FA3=0 bash "$RL_SCRIPT" smoke '++ray_kwargs.ray_init.runtime_env.env_vars.VLLM_STEP4_ENABLE_FA3="0"'
 ```
+
+### 单机 FP32 基线的激活环境对照
+
+以下对照覆盖 sft100 单机入口实际加载的项目 `scripts/activate.sh`、共享运行时的 `activate.sh`、batch-invariant 和 HYBM 子脚本，以及 verl 的 PPO Ray 默认环境。表中 A3 一列描述代码行为。A3 作业所在 shell、容器或 CANN 9.3.0 的 `set_env.sh` 也可能已设置同名变量。
+
+| 项目 | 已跑通基线 | A3 单机入口及影响 |
+|---|---|---|
+| Python 包搜索 | `PYTHONNOUSERSITE=1` | 启动器未显式设置。可能影响是否从用户的 site-packages 加载包。 |
+| CPU 线程 | `OMP_NUM_THREADS` 默认 `4`，已有非空值优先 | 启动器未显式设置。做性能对比时记录训练进程和 worker 的实际线程设置。 |
+| HCCL 建链 | `HCCL_CONNECT_TIMEOUT` 默认 `1800` 秒，已有非空值优先 | 启动器未显式设置。影响通信建链的等待时间。 |
+| HCCL 端口 | `HCCL_NPU_SOCKET_PORT_RANGE=auto` | 父环境未设置时，verl 的 PPO Ray 环境给 worker 配置 NPU 和 host 两个端口范围为 `auto`。 |
+| rollout 和可见卡 | `VLLM_STEP4_ENABLE_FA3=0`、`VLLM_WORKER_MULTIPROC_METHOD=spawn`、`RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES=1` | A3 入口已设置并传给 Ray worker。 |
+| 临时目录和缓存 | `TMPDIR=/tmp`。共享运行时指定节点本地的 `XDG_CACHE_HOME`、`TORCH_EXTENSIONS_DIR`、`TRITON_CACHE_DIR`、`VLLM_CACHE_ROOT`；RL 另设本次作业的 `RAY_TMPDIR` | A3 要求用户指定 `RAY_TMPDIR`，其余沿用现场环境或库默认值。对比首次编译耗时要区分冷缓存和热缓存。 |
+| CANN、Python 和算子路径 | `CANN_ENV_SCRIPT`、`ASCEND_HOME_PATH`、`PATH`、`PYTHONPATH`、`LD_LIBRARY_PATH`、`ASCEND_CUSTOM_OPP_PATH` 包含基线的 CANN 9.2、bisheng、GBSA、FLA、自定义算子和 Python 库目录 | A3 使用本机 CANN 9.3.0、Conda、四仓 editable 安装和已验证的算子目录。vLLM Ascend 的 bootstrap 会在自己的 vendor 目录存在时添加 OPP 路径。GBSA/GBSAG 仍以 A3 实际执行检查为准。 |
+| 旧工程和可选组件 | `STEP5_HOST_ENV`、`STEP5_PYTHON`、`STEP5_RE_ROOT`、`STEP5_R3_ROOT` 用于旧工程定位。可选 batch-invariant 脚本追加 vendor 路径，HYBM 脚本替换 `ASCEND_HOME_PATH`，DeepEP 增加 `SHMEM_ROOT` 及库路径 | 本次 A3 使用独立 Conda 和用户指定的路径，DeepEP、batch invariant 均关闭。上述 A5 私有路径不适用于这个入口。 |
+
+在激活过的 A3 作业终端执行，查看启动前的实际值。训练日志中的 `ray init kwargs` 可另查提交给 Ray 的显式设置。
+
+```bash
+python - <<'PY'
+import os, site, sys
+print("Python:", sys.executable, "user site enabled:", site.ENABLE_USER_SITE)
+for key in ("PYTHONNOUSERSITE", "OMP_NUM_THREADS", "HCCL_CONNECT_TIMEOUT",
+            "HCCL_NPU_SOCKET_PORT_RANGE", "TMPDIR", "RAY_TMPDIR", "XDG_CACHE_HOME",
+            "TORCH_EXTENSIONS_DIR", "TRITON_CACHE_DIR", "VLLM_CACHE_ROOT",
+            "ASCEND_HOME_PATH", "ASCEND_CUSTOM_OPP_PATH", "PYTHONPATH", "LD_LIBRARY_PATH"):
+    print(key, repr(os.getenv(key)))
+PY
+```
+
+如果要复用基线的三项通用设置，在同一终端启动 RL 前执行：
+
+```bash
+export PYTHONNOUSERSITE=1
+export OMP_NUM_THREADS=${OMP_NUM_THREADS:-4}
+export HCCL_CONNECT_TIMEOUT=${HCCL_CONNECT_TIMEOUT:-1800}
+```
