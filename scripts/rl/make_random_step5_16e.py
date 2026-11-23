@@ -1,4 +1,4 @@
-"""Create a seeded FP32 Hugging Face checkpoint for the fixed Step5 16-expert layout."""
+"""Create a seeded BF16 Hugging Face checkpoint for the fixed Step5 16-expert layout."""
 import argparse
 from collections import defaultdict
 import hashlib
@@ -27,8 +27,8 @@ def write_shard(path, tensors, seed):
     header = {"__metadata__": {"format": "pt"}}
     offset = 0
     for name, shape in tensors:
-        end = offset + prod(shape) * 4
-        header[name] = dict(dtype="F32", shape=shape, data_offsets=[offset, end])
+        end = offset + prod(shape) * 2
+        header[name] = dict(dtype="BF16", shape=shape, data_offsets=[offset, end])
         offset = end
     encoded = json.dumps(header, separators=(",", ":")).encode()
     encoded += b" " * (-len(encoded) % 8)
@@ -47,7 +47,10 @@ def write_shard(path, tensors, seed):
                     data *= np.float32(0.02)
                 else:
                     data = np.full(n, fill, dtype=np.float32)
-                out.write(memoryview(data.astype("<f4", copy=False)))
+                # Round finite FP32 values to BF16, nearest with ties to even.
+                bits = data.view(np.uint32)
+                rounded = bits + np.uint32(0x7fff) + ((bits >> 16) & 1)
+                out.write(memoryview((rounded >> 16).astype("<u2")))
                 remaining -= n
 
 
@@ -77,8 +80,8 @@ def main():
             raise ValueError(f"invalid layout entry for {name}")
         shards[shard].append((name, shape))
         weight_map[name] = shard
-        total += 4 * prod(shape)
-    print(f"16 experts, top-8, {len(weight_map)} tensors, {len(shards)} shards, {total / 2**30:.1f} GiB, seed={args.seed}", flush=True)
+        total += 2 * prod(shape)
+    print(f"BF16 checkpoint, 16 experts, top-8, {len(weight_map)} tensors, {len(shards)} shards, {total / 2**30:.1f} GiB, seed={args.seed}", flush=True)
     if args.plan:
         return
     if dest.exists() or dest.is_relative_to(assets):
@@ -98,7 +101,7 @@ def main():
             print(f"[{i}/{len(shards)}] {shard}", flush=True)
         index = {"metadata": {"total_size": total}, "weight_map": weight_map}
         (stage / "model.safetensors.index.json").write_text(json.dumps(index, indent=2))
-        (stage / "random-init.json").write_text(json.dumps({"seed": args.seed, "numpy": np.__version__, "config_sha256": digest}))
+        (stage / "random-init.json").write_text(json.dumps({"checkpoint_dtype": "BF16", "seed": args.seed, "numpy": np.__version__, "config_sha256": digest}))
         stage.rename(dest)
     print(f"MODEL={dest}")
 
