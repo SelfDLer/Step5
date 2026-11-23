@@ -181,6 +181,17 @@ export FSDP_SRC='/mnt/share/z00988734/workspace/step5-a3/Step5/src/FSDPTurbo'
 python "$OP_CHECK" preflight --device 0 --ascend-src "$ASCEND_SRC" --fsdp-src "$FSDP_SRC" --out '/你的路径/a3-single-op-check-001'
 ```
 
+**单独定位 CSA decode 编译器退出。** `AutoBlockify disabled ... atomic operations` 表示该优化已被编译器关闭。`bishengir-compile ... --target=Ascend910_9382 ... SIGABRT` 表示编译器子进程异常退出。多进程日志交错，排查时同时保留出错 worker 的完整 traceback 和编译器 stderr。若怀疑 `_csa_decode_stage_flush_kernel`，用空闲卡执行：
+
+```bash
+export CSA_OUT='/你的路径/a3-csa-decode-001'
+python "$OP_CHECK" preflight --only csa_decode_flush --device 0 --ascend-src "$ASCEND_SRC" --fsdp-src "$FSDP_SRC" --out "$CSA_OUT"
+cat "$CSA_OUT/environment.json"
+cat "$CSA_OUT/csa_decode_flush.log"
+```
+
+该用例也纳入默认预检。它复用固定仓库的参考测试，仅将调用切到 Step5 实现，使用独立冷缓存检查单行 slot 分配、staging、8-token region flush、FP8 输出和 slot 释放。若同样 SIGABRT，保留该目录；在独立 A3 环境中一次只改一个与本机 CANN 配套的 Triton 构建，用相同代码和输入重跑。若通过，继续提取 TP4 异常链中的内核名、实际 `rows/live_rows`、`ACTIVE_CAPACITY`、dtype、stride 和编译器断言，单行测试不能代表这些线上特化。对比版本时同时记录驱动、固件、CANN 完整构建号和日志中实际调用的编译器版本。
+
 **第二步：运行 16 卡真实 GRPO 并采集算子。** 在 16 卡作业终端设置上文所列的 `RL_SCRIPT`、`MODEL`、数据和辅助文件绝对路径。`ops` 沿用 `train` 的 batch、并行和 token 配置，默认只跑一个训练步，跳过定期保存和验证。训练和 rollout 各启用全部 rank 的 NPU profiler。确认输出盘能容纳 16 卡两侧的原始 trace 和解析结果；本模式的时间和显存数据包含采集开销。
 
 ```bash

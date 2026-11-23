@@ -2,6 +2,7 @@
 import argparse
 from collections import Counter, defaultdict
 import csv
+from importlib import metadata, util
 import json
 import os
 from pathlib import Path
@@ -32,16 +33,50 @@ def preflight(args):
                                 fused / "check_fsdp_norm_rope_npu.py"],
         "swiglu_grad": ["-m", "pytest", "-k", "npu", fused / "test_step5_swiglu.py"],
         "decode_sparse_meta": ["-m", "pytest", triton / "test_step5_decode_sparse_meta.py"],
+        "csa_decode_flush": ["-m", "pytest", args.out / "test_step5_csa_decode_flush.py"],
         "fused_add_norm": ["-m", "pytest", triton / "test_step5_fused_add_rms_norm.py"],
     }
     if not args.ascend_src.is_dir() or not args.fsdp_src.is_dir():
         raise SystemExit("check --ascend-src and --fsdp-src")
     if args.device < 0:
         raise SystemExit("choose one nonnegative, idle NPU device ID")
+    if args.only:
+        if args.only not in cases:
+            raise SystemExit("unknown case; choose from " + ", ".join(cases))
+        cases = {args.only: cases[args.only]}
     args.out.mkdir(parents=True, exist_ok=False)
     env = {**os.environ, "ASCEND_RT_VISIBLE_DEVICES": str(args.device)}
     states = {}
     for name, command in cases.items():
+        case_env = env
+        if name == "csa_decode_flush":
+            # Keep the pinned numerical and slot-release assertions; the upstream
+            # test still imports the step4 module although rollout invokes step5.
+            original = triton / "test_step4_csa_decode_flush.py"
+            old_import = "from vllm_ascend.models.step4.summary_kernels import csa_compact_decode_update"
+            new_import = old_import.replace(".step4.", ".step5.")
+            src = original.read_text() if original.is_file() else ""
+            if src.count(old_import) != 1:
+                states[name] = "INCOMPLETE"
+                print(f"INCOMPLETE {name}: reference test changed or missing at {original}", flush=True)
+                continue
+            command[-1].write_text(src.replace(old_import, new_import))
+            case_env = {**env, "PYTHONPATH": os.pathsep.join(filter(None, [str(args.ascend_src), env.get("PYTHONPATH")])),
+                        "TRITON_CACHE_DIR": str(args.out / "csa-triton-cache")}
+            packages = {}
+            for dist in ("torch", "torch-npu", "triton", "triton-ascend", "vllm-ascend"):
+                try:
+                    packages[dist] = metadata.version(dist)
+                except metadata.PackageNotFoundError:
+                    packages[dist] = None
+            spec = util.find_spec("triton")
+            sha = subprocess.run(["git", "-C", args.ascend_src, "rev-parse", "HEAD"],
+                                 capture_output=True, text=True)
+            (args.out / "environment.json").write_text(json.dumps({
+                "packages": packages, "python": py, "triton_file": spec.origin if spec else None,
+                "ascend_src": str(args.ascend_src), "ascend_commit": sha.stdout.strip(),
+                "ascend_home": env.get("ASCEND_HOME_PATH"), "device": args.device
+            }, indent=2))
         log = args.out / (name + ".log")
         junit = args.out / (name + ".xml")
         pytest_case = command[:2] == ["-m", "pytest"]
@@ -49,7 +84,7 @@ def preflight(args):
             command += ["-q", "-rs", f"--junitxml={junit}"]
         print(f"RUN {name} -> {log}", flush=True)
         with log.open("w") as stream:
-            rc = subprocess.run([py, *command], env=env, stdout=stream, stderr=subprocess.STDOUT).returncode
+            rc = subprocess.run([py, *command], env=case_env, stdout=stream, stderr=subprocess.STDOUT).returncode
         state = "FAIL" if rc else "PASS"
         if pytest_case and not rc:
             try:
@@ -156,6 +191,7 @@ def main():
     one.add_argument("--fsdp-src", type=absolute, required=True)
     one.add_argument("--out", type=absolute, required=True)
     one.add_argument("--device", type=int, required=True)
+    one.add_argument("--only", help="run just one case, e.g. csa_decode_flush")
     report = modes.add_parser("inventory")
     report.add_argument("--run-dir", type=absolute, required=True)
     args = cli.parse_args()
