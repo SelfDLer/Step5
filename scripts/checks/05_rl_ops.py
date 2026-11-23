@@ -44,6 +44,34 @@ def write_states(out, states):
     pending.replace(out / "results.json")
 
 
+def pytest_result(junit, rc):
+    """Use pytest's call-phase failure records, including for mixed outcomes."""
+    try:
+        tests = ET.parse(junit).findall(".//testcase")
+    except (OSError, ET.ParseError) as exc:
+        return "INCOMPLETE", f"pytest exit {rc}, no usable JUnit report ({exc})"
+    counts = Counter()
+    for test in tests:
+        if test.find("failure") is not None:
+            counts["call failures"] += 1
+        if test.find("skipped") is not None:
+            counts["skipped"] += 1
+        for error in test.findall("error"):
+            message = error.get("message", "")
+            phase = next((p for p in ("setup", "teardown") if message.startswith(f"failed on {p}")), None)
+            if not phase:
+                phase = "collection" if message == "collection failure" else "runner"
+            counts[f"{phase} errors"] += 1
+    evidence = f"pytest exit {rc}, JUnit testcase records={len(tests)}"
+    for outcome, count in counts.items():
+        evidence += f", {outcome}={count}"
+    if counts["call failures"]:
+        return "FAIL", evidence
+    if rc or not tests or counts:
+        return "INCOMPLETE", evidence
+    return "PASS", evidence
+
+
 def record_environment(args):
     packages = {}
     for dist in ("torch", "torch-npu", "triton", "triton-ascend", "vllm-ascend"):
@@ -53,7 +81,9 @@ def record_environment(args):
             packages[dist] = None
     spec = util.find_spec("triton")
     data = {"packages": packages, "python": sys.executable, "triton_file": spec.origin if spec else None,
-            "ascend_home": os.getenv("ASCEND_HOME_PATH"), "device": args.device}
+            "ascend_home": os.getenv("ASCEND_HOME_PATH"), "device": args.device,
+            "inherited_VLLM_USE_MODELSCOPE": os.getenv("VLLM_USE_MODELSCOPE"),
+            "preflight_VLLM_USE_MODELSCOPE": "false"}
     for role, src in (("ascend", args.ascend_src), ("fsdp", args.fsdp_src)):
         rev = subprocess.run(["git", "-C", src, "rev-parse", "HEAD"], capture_output=True, text=True)
         data[role + "_src"] = str(src)
@@ -116,7 +146,8 @@ def preflight(args):
     py = sys.executable
     checks = Path(__file__).resolve().parent
     fused = args.fsdp_src / "tests/step5_fused_ops"
-    triton = args.ascend_src / "tests/e2e/nightly/single_node/ops/singlecard_ops/triton"
+    ascend_ops = args.ascend_src / "tests/e2e/nightly/single_node/ops"
+    triton = ascend_ops / "singlecard_ops/triton"
     cases = {
         "gbsa_gbsag": [checks / "03_check_gbsa.py", "--expected-prefix", sys.prefix, "--kv-heads", "4",
                        "--lengths", "7", "8", "9", "127", "128", "129"],
@@ -161,7 +192,7 @@ def preflight(args):
     map_status = 0
     if not args.only:
         map_status = kernel_map(args.ascend_src, args.out / "kernel-map.csv")
-    env = {**os.environ, "ASCEND_RT_VISIBLE_DEVICES": str(args.device),
+    env = {**os.environ, "ASCEND_RT_VISIBLE_DEVICES": str(args.device), "VLLM_USE_MODELSCOPE": "false",
            "STEP5_CHECK_FSDP_SRC": str(args.fsdp_src), "STEP5_CHECK_ASCEND_SRC": str(args.ascend_src)}
     states = dict.fromkeys(cases, "NOT_RUN")
     write_states(args.out, states)
@@ -196,18 +227,26 @@ def preflight(args):
         junit = args.out / (name + ".xml")
         pytest_case = command[:2] == ["-m", "pytest"]
         if pytest_case:
+            # The E2E parent conftest imports ModelScope for unrelated LoRA fixtures.
+            # Keep the ops conftest: it initializes Triton and registers NPU operations.
+            test_files = [Path(str(arg).partition("::")[0]) for arg in command[2:]]
+            parents = {path.parent.resolve() for path in test_files if path.is_absolute() and path.suffix == ".py"}
+            if parents == {args.out.resolve()}:
+                command += [f"--confcutdir={args.out}"]
+            elif parents == {checks}:
+                command += [f"--confcutdir={checks}"]
+            elif parents and all(path.is_relative_to(ascend_ops.resolve()) for path in parents):
+                command += [f"--confcutdir={ascend_ops}"]
             command += ["-q", "-rs", "--maxfail=0", f"--junitxml={junit}"]
         print(f"RUN {name} -> {log}", flush=True)
         with log.open("w") as stream:
             rc = subprocess.run([py, *command], env=case_env, stdout=stream, stderr=subprocess.STDOUT).returncode
         state = "FAIL" if rc else "PASS"
-        if pytest_case and not rc:
-            try:
-                tests = ET.parse(junit).findall(".//testcase")
-            except (OSError, ET.ParseError):
-                tests = []
-            if not tests or any(t.find("skipped") is not None for t in tests):
-                state = "INCOMPLETE"
+        if pytest_case:
+            state, evidence = pytest_result(junit, rc)
+            with log.open("a") as stream:
+                print(f"\n[preflight] {evidence}", file=stream)
+            print(evidence, flush=True)
         if state == "PASS" and name in {"indexer_i32", "indexer_i64", "csa_decode_flush"}:
             expected = "_csa_decode_stage_flush_kernel" if name == "csa_decode_flush" else "_indexer_qkz_norm_rope_kernel"
             if not any(kernel == expected and built for (_, kernel), built in compile_records(case_cache).items()):

@@ -165,7 +165,8 @@ export ASCEND_SRC='/mnt/share/z00988734/workspace/step5-a3/Step5/src/vllm-ascend
 python "$INDEXER_CHECK" --ascend-src "$ASCEND_SRC" --positions int64 --lengths 1 33 129
 # 独立运行 int32 对照，判断是否与索引类型相关
 python "$INDEXER_CHECK" --ascend-src "$ASCEND_SRC" --positions int32 --lengths 1 33 129
-python -m pytest -q -rs "$ASCEND_SRC/tests/e2e/nightly/single_node/ops/singlecard_ops/triton/test_step5_fused_add_rms_norm.py"
+ASCEND_OPS="$ASCEND_SRC/tests/e2e/nightly/single_node/ops"
+VLLM_USE_MODELSCOPE=false python -m pytest --confcutdir="$ASCEND_OPS" -q -rs "$ASCEND_OPS/singlecard_ops/triton/test_step5_fused_add_rms_norm.py"
 ```
 
 当前 16 专家模型在 TP8 下每个 rank 的 indexer 有 4 个 Q 头、1 个 K 头，head dim 256、RoPE dim 32。旧预检将独立的 Q/K/Z 切片传给内核，行跨度为 1536 个元素。rollout 从包含主 QKV、indexer Q/K/Z 和 gate 的同一投影中切片，行跨度为 3464。int64 通过只对实际测试的布局、长度、编译器和特化有效。上面两条命令用于手工缩小长度范围。完整排查请用下节默认矩阵。
@@ -186,6 +187,26 @@ python "$OP_CHECK" preflight --device 0 --ascend-src "$ASCEND_SRC" --fsdp-src "$
 * rollout 侧检查融合 indexer、主 attention 的 Q/K Norm + RoPE、paged indexer logits、稀疏 decode 元数据、CSA prefill/decode 与交接、summary 状态、融合残差 RMSNorm 和 SwiGLU。单独调用 A3 的 MoE gating 实现，用 NumPy 参考值校验 16 专家、top-8、scale 3 的专家 ID 和权重。每组使用新的 Triton 缓存。int64 和 int32 独立运行，indexer 和 CSA flush 还要求找到对应的完整编译产物。
 * indexer 默认跑 1、8、32、33、129、1024、1152、3072 个 token，在 33 token 上还逐个调用固定源码注册的 11 个候选分块并与参考输出比较。日志分别记录生产入口和各个候选的结果。若只有某个候选失败，需要结合真实运行的编译信息判断这次 rollout 是否会选中它。单卡 eager 测试不经过多卡 rollout 的图捕获和回放。
 * `results.json` 随每组完成更新。跳过的 pytest 用例计为 `INCOMPLETE`，尚未处理的组显示 `NOT_RUN`。`preflight-kernels.csv` 把每个发现的启动点与本次单卡检查对照。优先看 `NO_PREFLIGHT_EVIDENCE`、`NO_PASSING_CASE`、`AMBIGUOUS_NAME`。`COMPILED_IN_PASSING_CASE` 代表在通过组的缓存里见过该名称；同名可能有多种特化。`kernel-map.csv` 给出源码位置、启动参数、constexpr 以及静态可解析的测试调用。
+
+#### 旧日志出现 ModelScope 或 snapshot_download
+
+固定版 vllm-ascend 的 `tests/e2e/conftest.py` 在模块顶层导入 `snapshot_download`，供 LoRA 端到端测试的 fixture 使用。若 traceback 停在这行并报 `No module named 'modelscope'`，pytest 在收集测试前就退出了，这一行没有执行下载。三个直接从 E2E 目录收集的预检组是 `rollout_swiglustep`、`decode_sparse_meta` 和 `fused_add_norm`。新版从 `single_node/ops` 开始加载 pytest 配置，保留设备初始化和自定义算子注册。生成在输出目录的单卡用例也限定了配置搜索范围。预检子进程设置 `VLLM_USE_MODELSCOPE=false`，因为这些用例只使用本地配置和测试张量。
+
+先更新已检出的 `a5toa3` 分支，再用下面的命令逐项重跑旧日志里确实缺少 ModelScope 的组。沿用第一步的 `OP_CHECK`、`ASCEND_SRC`、`FSDP_SRC`、`MODEL`，把 `OP_OUT` 指向**旧预检目录**。每组结果写入新的独立目录。
+
+```bash
+git -C /mnt/share/z00988734/workspace/step5-a3/Step5 pull --ff-only
+export OP_OUT='/你的路径/旧预检目录'
+export RETRY_OUT='/你的路径/新的重跑目录'
+export OP_DEVICE=0
+for log in "$OP_OUT"/*.log; do
+    grep -Fq "No module named 'modelscope'" "$log" || continue
+    op_case=$(basename "$log" .log)
+    python "$OP_CHECK" preflight --only "$op_case" --device "$OP_DEVICE" --ascend-src "$ASCEND_SRC" --fsdp-src "$FSDP_SRC" --model-config "$MODEL/config.json" --tp 8 --out "$RETRY_OUT/$op_case" || echo "请查看 $RETRY_OUT/$op_case/$op_case.log"
+done
+```
+
+新版 pytest 日志末尾记录退出码和阶段。仅收集、fixture 或报告不完整时显示 `INCOMPLETE`；有用例在调用阶段失败时保留 `FAIL`。判断具体算子需看该用例的 traceback。若日志已经进入 `snapshot_download(...)` 函数体，请按首个调用它的文件和行号另行定位。
 
 **单独定位 CSA decode 编译器退出。** `AutoBlockify disabled ... atomic operations` 表示该优化已被编译器关闭。`bishengir-compile ... --target=Ascend910_9382 ... SIGABRT` 表示编译器子进程异常退出。多进程日志交错，排查时同时保留出错 worker 的完整 traceback 和编译器 stderr。若怀疑 `_csa_decode_stage_flush_kernel`，用空闲卡执行：
 
