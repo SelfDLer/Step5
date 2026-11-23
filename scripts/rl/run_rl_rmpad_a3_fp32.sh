@@ -4,7 +4,7 @@
 # Uses the A5 GRPO reward manager (Geo3K uses mathruler==0.1.0).
 # For performance comparisons use the same model, samples, steps, reward and logger.
 set -euo pipefail
-case ${1:-} in smoke|config|train) mode=$1; shift ;; *) echo 'Usage: bash "$RL_SCRIPT" {smoke|config|train} [Hydra overrides ...]' >&2; exit 2 ;; esac
+case ${1:-} in smoke|config|train|ops) mode=$1; shift ;; *) echo 'Usage: bash "$RL_SCRIPT" {smoke|config|train|ops} [Hydra overrides ...]' >&2; exit 2 ;; esac
 paths=(MODEL TRAIN_FILES VAL_FILES RUN_DIR BYTELEVEL_HELPER REWARD_MODULE)
 if [[ $mode != config ]]; then paths+=(RAY_TMPDIR); fi
 for name in "${paths[@]}"; do
@@ -95,6 +95,7 @@ SAVE_FREQ=${SAVE_FREQ:--1}
 TEST_FREQ=${TEST_FREQ:-10}
 IGNORE_EOS=${IGNORE_EOS:-false}
 TRAINER_LOGGERS='[console]'
+if [[ $mode == ops ]]; then TOTAL_STEPS=1 SAVE_FREQ=-1 TEST_FREQ=-1; fi
 if [[ -n ${RL_INSIGHT_SERVER_URL:-} ]]; then TRAINER_LOGGERS='[console,rl_insight]'; fi
 
 # ---- Worker environment and output ----
@@ -106,6 +107,9 @@ export VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY=1 STEP5_RANK0_EXPERT_INIT=1 STE
 mkdir -p -- "$RUN_DIR"
 RUN_DIR=$(realpath -- "$RUN_DIR")
 if [[ $mode != config && -e "$RUN_DIR/train.log" ]]; then echo "Choose a fresh RUN_DIR; train.log exists in $RUN_DIR" >&2; exit 2; fi
+if [[ $mode == ops && ( -e "$RUN_DIR/profiles" || -e "$RUN_DIR/ops-trainer-exited-ok" ) ]]; then
+    echo "Choose a fresh RUN_DIR for the operator inventory." >&2; exit 2
+fi
 MODEL=$(python -S "$BYTELEVEL_HELPER" "$MODEL" "$RUN_DIR")
 if [[ $mode != config ]]; then mkdir -p -- "$RAY_TMPDIR"; export RAY_TMPDIR; fi
 # Quote string values for Hydra. Runtime env_vars must remain strings (e.g. "0").
@@ -282,8 +286,28 @@ trainer_args=(
 )
 
 cd -- "$RUN_DIR"
+op_profile=()
+if [[ $mode == ops ]]; then
+    # This source snapshot reports a 0.1.dev version. verl starts/stops the
+    # profiler but omits the newer engine CLI argument for that version string.
+    engine_profile=$(python -c 'import json,sys; print(json.dumps(dict(profiler="torch", torch_profiler_dir=sys.argv[1], ignore_frontend=True)))' "$RUN_DIR/profiles/rollout")
+    op_profile=(
+        global_profiler.tool=npu 'global_profiler.steps=[1]'
+        "global_profiler.save_path=$(hq "$RUN_DIR/profiles")"
+        actor_rollout_ref.actor.profiler.enable=true actor_rollout_ref.actor.profiler.all_ranks=true
+        "actor_rollout_ref.actor.profiler.save_path=$(hq "$RUN_DIR/profiles/actor")"
+        actor_rollout_ref.actor.profiler.tool_config.npu.discrete=false
+        actor_rollout_ref.actor.profiler.tool_config.npu.level=level1
+        'actor_rollout_ref.actor.profiler.tool_config.npu.contents=[npu,shapes]'
+        actor_rollout_ref.actor.profiler.tool_config.npu.analysis=true
+        actor_rollout_ref.rollout.profiler.enable=true actor_rollout_ref.rollout.profiler.all_ranks=true
+        "actor_rollout_ref.rollout.profiler.save_path=$(hq "$RUN_DIR/profiles/rollout")"
+        actor_rollout_ref.rollout.profiler.tool_config.npu.discrete=true
+        "++actor_rollout_ref.rollout.engine_kwargs.vllm.profiler_config=$(hq "$engine_profile")"
+    )
+fi
 command=(python -P -m verl.trainer.main_ppo --config-name ppo_trainer
-    "${turbo_args[@]}" "${data_args[@]}" "${actor_args[@]}" "${rollout_args[@]}" "${trainer_args[@]}" "$@")
+    "${turbo_args[@]}" "${data_args[@]}" "${actor_args[@]}" "${rollout_args[@]}" "${trainer_args[@]}" "${op_profile[@]}" "$@")
 printf 'A3: %s NPUs, actor FSDP=%s EP=%s expert-FSDP=%s, rollout TP=%s (%s replicas), dispatcher=%s\n' \
     "$N_GPUS" "$N_GPUS" "$EP_SIZE" "$EXPERT_FSDP_SIZE" "$ROLLOUT_TP_SIZE" "$((N_GPUS / ROLLOUT_TP_SIZE))" "$STEP5_EP_DISPATCHER"
 printf '%q ' "${command[@]}" > "$RUN_DIR/command.sh"
@@ -294,4 +318,5 @@ if [[ $mode != train ]]; then
 fi
 if [[ $mode != config ]]; then
     "${command[@]}" 2>&1 | tee "$RUN_DIR/train.log"
+    if [[ $mode == ops ]]; then touch "$RUN_DIR/ops-trainer-exited-ok"; fi
 fi

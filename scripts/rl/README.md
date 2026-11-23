@@ -169,3 +169,29 @@ python -m pytest -q -rs "$ASCEND_SRC/tests/e2e/nightly/single_node/ops/singlecar
 ```
 
 当前 16 专家模型在 TP8 下每个 rank 的 indexer 有 4 个 Q 头、1 个 K 头，head dim 256、RoPE dim 32。预检覆盖 BF16、非连续 Q/K/Z 分片和两种位置索引。仓内原有 indexer 测试只传 int32。即使 int32 通过，只要 int64 失败，原始 rollout 路径仍可能失败。检查结果以实际执行的 PASS 为准，跳过的测试不算通过。随后在原 16 卡终端执行一次 `smoke`，覆盖 TP 通信和真正的 prefill/decode 路径；单卡小样本不能证明所有图和形状都可用。
+
+### 测试实际使用的算子
+
+**第一步：独立单卡预检。** 在 A3 已激活的环境指定一张空闲卡、两个源码目录和新的输出目录。检查 GBSA/GBSAG 前反向、融合 indexer 的 int64/int32 两种输入、FSDP Norm/RoPE 前反向、SwiGLU 梯度、decode 稀疏元数据和 rollout 融合残差 RMSNorm。每组独立进程，失败后继续下一组；查看 `results.json` 和各组日志。pytest 跳过用例会标为 INCOMPLETE。
+
+```bash
+export OP_CHECK='/mnt/share/z00988734/workspace/step5-a3/Step5/scripts/checks/05_rl_ops.py'
+export ASCEND_SRC='/mnt/share/z00988734/workspace/step5-a3/Step5/src/vllm-ascend'
+export FSDP_SRC='/mnt/share/z00988734/workspace/step5-a3/Step5/src/FSDPTurbo'
+python "$OP_CHECK" preflight --device 0 --ascend-src "$ASCEND_SRC" --fsdp-src "$FSDP_SRC" --out '/你的路径/a3-single-op-check-001'
+```
+
+**第二步：运行 16 卡真实 GRPO 并采集算子。** 在 16 卡作业终端设置上文所列的 `RL_SCRIPT`、`MODEL`、数据和辅助文件绝对路径。`ops` 沿用 `train` 的 batch、并行和 token 配置，默认只跑一个训练步，跳过定期保存和验证。训练和 rollout 各启用全部 rank 的 NPU profiler。确认输出盘能容纳 16 卡两侧的原始 trace 和解析结果；本模式的时间和显存数据包含采集开销。
+
+```bash
+export RUN_DIR='/你的路径/a3-rl-op-coverage-001'
+export RAY_TMPDIR='/tmp/s5-op-001'
+export OP_CHECK='/mnt/share/z00988734/workspace/step5-a3/Step5/scripts/checks/05_rl_ops.py'
+# 已知 A3 融合 indexer 的 int64 用例失败时，用分步路径继续覆盖后续算子
+VLLM_STEP4_FUSE_INDEXER_NORM_ROPE=0 bash "$RL_SCRIPT" ops
+python "$OP_CHECK" inventory --run-dir "$RUN_DIR"
+```
+
+若要测试原融合性能路径，在**新目录**用 `VLLM_STEP4_FUSE_INDEXER_NORM_ROPE=1 bash "$RL_SCRIPT" ops`。两次 inventory 应分别保留。要覆盖视觉路径，训练 batch 必须实际包含图片；要覆盖长序列、不同序列边界和 decode，请用相应样本，确认 rollout 输出确实生成了多个 token。权重同步、反向、优化器、TP/EP 通信随真实单步执行；被配置关闭的 DeepEP、batch invariant，以及该步未触发的分支不会获得覆盖。初始化和图编译失败会出现在 `train.log`，算子级 profiler 的时间窗口为训练第 1 步。
+
+**读取结果。** `operators.csv` 按 actor/rollout、host/kernel/HCCL、设备和算子列出观察次数；shape、dtype 在 profiler 提供时记录。原始记录分别在 `profiles/actor` 和 `profiles/rollout`。`STEP_TRACED` 要求 trainer 正常退出、日志有第 1 步指标、两侧均有 16 个设备的 kernel，以及 host、HCCL 记录。缺文件、中途失败或只采到一侧会输出 `PARTIAL` 并保留已观察结果。profiler 的执行记录不能替代逐算子的数值参考测试。
