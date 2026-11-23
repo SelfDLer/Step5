@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # Step5 GRPO, single A3 node (16 x 64 GB). Run with the verified Conda/CANN environment.
-# Required: MODEL (local HF directory), TRAIN_FILES and VAL_FILES (one local Parquet each).
-# bash scripts/rl/run_rl_rmpad_a3_fp32.sh {smoke|config|train} [Hydra overrides ...]
+# Set the absolute paths listed in the RL README before invoking this script.
 # Uses the A5 GRPO reward manager (Geo3K uses mathruler==0.1.0).
 # For performance comparisons use the same model, samples, steps, reward and logger.
 set -euo pipefail
-case ${1:-} in smoke|config|train) mode=$1; shift ;; *) echo 'Usage: MODEL=... TRAIN_FILES=... VAL_FILES=... bash scripts/rl/run_rl_rmpad_a3_fp32.sh {smoke|config|train} [overrides ...]' >&2; exit 2 ;; esac
-root=$(cd -- "$(dirname -- "$0")/../.." && pwd -P)
-helpers=$root/reference/a5/scripts
-: "${MODEL:?Set MODEL to the Step5 HF checkpoint directory}"
-: "${TRAIN_FILES:?Set TRAIN_FILES to a verl training parquet}"
-: "${VAL_FILES:?Set VAL_FILES to a verl validation parquet}"
+case ${1:-} in smoke|config|train) mode=$1; shift ;; *) echo 'Usage: bash "$RL_SCRIPT" {smoke|config|train} [Hydra overrides ...]' >&2; exit 2 ;; esac
+paths=(MODEL TRAIN_FILES VAL_FILES RUN_DIR BYTELEVEL_HELPER REWARD_MODULE)
+if [[ $mode != config ]]; then paths+=(RAY_TMPDIR); fi
+for name in "${paths[@]}"; do
+    [[ ${!name:-} == /* ]] || { echo "Set $name to an absolute path." >&2; exit 2; }
+done
+for file in "$BYTELEVEL_HELPER" "$REWARD_MODULE"; do
+    [[ -f $file && -r $file ]] || { echo "Cannot read $file" >&2; exit 2; }
+done
 MODEL=$(realpath -- "$MODEL")
 TRAIN_FILES=$(realpath -- "$TRAIN_FILES")
 VAL_FILES=$(realpath -- "$VAL_FILES")
@@ -83,12 +85,11 @@ export PYDANTIC_DISABLE_PLUGINS=${PYDANTIC_DISABLE_PLUGINS:-__all__}
 export STEP5_EFSDP_CAST_FORWARD_INPUTS=true VLLM_BATCH_INVARIANT=0 VERL_FULL_DETERMINISM=0
 export HCCL_OP_EXPANSION_MODE=AIV STEP5_ROLLOUT_HCCL_MODE=AIV
 export VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY=1 STEP5_RANK0_EXPERT_INIT=1 STEP5_STREAM_EXPERT_WEIGHTS=0
-RUN_DIR=${RUN_DIR:-$root/outputs/step5-a3-fp32-$(date +%Y%m%d-%H%M%S)-$$}
 mkdir -p -- "$RUN_DIR"
 RUN_DIR=$(realpath -- "$RUN_DIR")
 if [[ $mode != config && -e "$RUN_DIR/train.log" ]]; then echo "Choose a fresh RUN_DIR; train.log exists in $RUN_DIR" >&2; exit 2; fi
-MODEL=$(python -S "$helpers/rl_bytelevel_model.py" "$MODEL" "$RUN_DIR")
-if [[ $mode != config ]]; then RAY_TMPDIR=$(mktemp -d /tmp/s5rl-XXXXXX); export RAY_TMPDIR; fi
+MODEL=$(python -S "$BYTELEVEL_HELPER" "$MODEL" "$RUN_DIR")
+if [[ $mode != config ]]; then mkdir -p -- "$RAY_TMPDIR"; export RAY_TMPDIR; fi
 # Quote string values for Hydra. Runtime env_vars must remain strings (e.g. "0").
 hq() {
     local value=$1
@@ -233,7 +234,7 @@ rollout_args=(
 trainer_args=(
     reward.reward_manager.source=importlib
     reward.reward_manager.name=Step5Geo3KRewardManager
-    "reward.reward_manager.module.path=$(hq "$helpers/step5_geo3k_reward.py")"
+    "reward.reward_manager.module.path=$(hq "$REWARD_MODULE")"
     algorithm.adv_estimator=grpo
     algorithm.filter_groups.enable=false
     "trainer.logger=$TRAINER_LOGGERS"
@@ -263,7 +264,7 @@ trainer_args=(
     transfer_queue.backend.SimpleStorage.num_data_storage_units=2
 )
 
-cd -- "$root"
+cd -- "$RUN_DIR"
 command=(python -P -m verl.trainer.main_ppo --config-name ppo_trainer
     "${turbo_args[@]}" "${data_args[@]}" "${actor_args[@]}" "${rollout_args[@]}" "${trainer_args[@]}" "$@")
 printf 'A3: %s NPUs, actor FSDP=%s EP=%s expert-FSDP=%s, rollout TP=%s (%s replicas), dispatcher=%s\n' \

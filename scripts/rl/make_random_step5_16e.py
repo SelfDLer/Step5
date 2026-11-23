@@ -54,17 +54,26 @@ def write_shard(path, tensors, seed):
                 remaining -= n
 
 
+def absolute_path(value):
+    path = Path(value)
+    if not path.is_absolute():
+        raise argparse.ArgumentTypeError(f"expected an absolute path, got {value!r}")
+    return path
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--assets", required=True, type=Path, help="Step5 HF config/tokenizer directory; weights need not be downloaded")
-    parser.add_argument("--output", required=True, type=Path, help="new checkpoint directory")
+    parser.add_argument("--assets", required=True, type=absolute_path, help="Step5 HF config/tokenizer directory; weights need not be downloaded")
+    parser.add_argument("--output", required=True, type=absolute_path, help="new checkpoint directory")
+    parser.add_argument("--layout", required=True, type=absolute_path, help="16-expert tensor layout JSON")
+    parser.add_argument("--target-config", required=True, type=absolute_path, help="matching 16-expert HF config JSON")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--plan", action="store_true", help="validate layout and print size only")
     args = parser.parse_args()
     assets = args.assets.resolve()
     dest = args.output.resolve()
-    layout = json.loads(Path(__file__).with_name("step5_16e_layout.json").read_text())
-    target_config = Path(__file__).with_name("step5_16e_config.json")
+    layout = json.loads(args.layout.read_text())
+    target_config = args.target_config
     config = json.loads(target_config.read_text())
     digest = hashlib.sha256(json.dumps(config, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     if digest != layout["config_sha256"]:
