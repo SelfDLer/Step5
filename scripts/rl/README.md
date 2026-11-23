@@ -19,6 +19,13 @@ python "$GEN_SCRIPT" --assets "$ASSETS" --output "$MODEL" --layout "$LAYOUT" --t
 
 ## 2. 用该 checkpoint 在 A3 测试一个 GRPO step
 
+如果已有环境报 `ModuleNotFoundError: No module named 'qwen_vl_utils'`，在已激活的 Step5 环境中执行以下两行，再用新的 `RUN_DIR` 重跑。新安装时，四仓安装脚本的 `deps` 阶段会安装该包。
+
+```bash
+python -m pip install 'qwen-vl-utils==0.0.14'
+python -c 'from qwen_vl_utils import fetch_image, fetch_video, process_vision_info; from importlib.metadata import version; print(version("qwen-vl-utils"))'
+```
+
 ```bash
 export RL_SCRIPT='/mnt/share/z00988734/workspace/step5-a3/Step5/scripts/rl/run_rl_rmpad_a3_fp32.sh'
 export BYTELEVEL_HELPER='/mnt/share/z00988734/workspace/step5-a3/Step5/reference/a5/scripts/rl_bytelevel_model.py'
