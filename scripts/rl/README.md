@@ -206,9 +206,9 @@ for op_case in indexer_region_score indexer_region_score_long indexer_region_sco
 done
 ```
 
-* `indexer_region_score` 调用迁移分支的生产包装函数，检查 TP8 单 rank 输入、3072-token 配置对应的 384 个 region 容量，以及整批短 prefill 没有完整历史 region 的边界。top-k 为 512。
-* `indexer_region_score_long` 复用固定源码中 decode、prefill 和确定性用例。长输入使可见 region 数超过 512，可以检查实际筛选；检查项包括逻辑 ID 升序、因果可见范围和 `-1` 填充。
-* `indexer_region_score_vs_triton` 复用固定源码的两项数值对照，只比较因果可见区域的分数和选中 ID。若这一组失败，请按 traceback 区分 ACLNN 调用、Triton 参考实现和结果断言。
+* `indexer_region_score` 调用迁移分支的生产包装函数，覆盖 TP8 单 rank 输入、3072-token 配置的 384 个 region 容量、整批短 prefill 没有完整历史 region 的边界，以及超过 512 个可见候选时的 top-k 筛选。用独立 CPU 计算核对可见分数，长样本还检查重复调用的有效分数和全部 ID。接口允许未使用的 score 尾部保留任意值。
+* `indexer_region_score_long` 复用固定源码中 decode、prefill 的长上下文用例，检查逻辑 ID 升序、因果可见范围、top-k 选择和 `-1` 填充。上游旧确定性断言会比较未定义的 score 尾部，本预检的确定性检查只比较接口定义的输出。
+* `indexer_region_score_vs_triton` 独立运行固定源码的两项数值对照。A5-03-08 实测这组的 Triton 参考内核编译报 `ub overflow`，尚未完成两边的数值比较。若 A3 也报错，请按 traceback 区分 ACLNN 调用、Triton 参考实现和结果断言。
 
 #### 旧日志出现 ModelScope 或 snapshot_download
 

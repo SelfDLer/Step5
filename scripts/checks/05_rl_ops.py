@@ -169,7 +169,7 @@ def preflight(args):
         "rollout_moe_gate": ["-m", "pytest", checks / "test_rollout_moe_gate_npu.py"],
         "indexer_region_score": ["-m", "pytest", checks / "test_step5_indexer_region_score.py"],
         "indexer_region_score_long": ["-m", "pytest", region_score_tests, "-k",
-                                     "decode_rows_contract or prefill_rows_contract or determinism"],
+                                     "decode_rows_contract or prefill_rows_contract"],
         "indexer_region_score_vs_triton": ["-m", "pytest", region_score_tests, "-k", "triton_reference"],
         "rollout_swiglustep": ["-m", "pytest", triton / "test_swiglustep.py"],
         "decode_sparse_meta": ["-m", "pytest", triton / "test_step5_decode_sparse_meta.py"],
