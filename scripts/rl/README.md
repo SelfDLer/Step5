@@ -188,9 +188,31 @@ python "$OP_CHECK" preflight --device 0 --ascend-src "$ASCEND_SRC" --fsdp-src "$
 * indexer 默认跑 1、8、32、33、129、1024、1152、3072 个 token，在 33 token 上还逐个调用固定源码注册的 11 个候选分块并与参考输出比较。日志分别记录生产入口和各个候选的结果。若只有某个候选失败，需要结合真实运行的编译信息判断这次 rollout 是否会选中它。单卡 eager 测试不经过多卡 rollout 的图捕获和回放。
 * `results.json` 随每组完成更新。跳过的 pytest 用例计为 `INCOMPLETE`，尚未处理的组显示 `NOT_RUN`。`preflight-kernels.csv` 把每个发现的启动点与本次单卡检查对照。优先看 `NO_PREFLIGHT_EVIDENCE`、`NO_PASSING_CASE`、`AMBIGUOUS_NAME`。`COMPILED_IN_PASSING_CASE` 代表在通过组的缓存里见过该名称；同名可能有多种特化。`kernel-map.csv` 给出源码位置、启动参数、constexpr 以及静态可解析的测试调用。
 
+#### 单独验证 IndexerRegionScore
+
+生产 rollout 通过 `indexer_score_topk` 调用 `cann_ops_transformer` 的 `IndexerRegionScore`，输出可见历史 region 的分数和排序后的 top-k ID。旧预检中的 `indexer_i64/i32` 验证前面的 Norm/RoPE，`paged_indexer_logits` 验证独立的 Triton 打分实现；两者的结果都无法确认这个 ACLNN 算子在 A3 上可用。
+
+更新 `a5toa3` 后，在已激活的 A3 环境单独运行下面三组。每组使用一个新的输出目录；完整 `preflight` 也会执行这三组。仅需一张空闲卡和两个已安装的源码目录。
+
+```bash
+git -C /mnt/share/z00988734/workspace/step5-a3/Step5 pull --ff-only
+export OP_CHECK='/mnt/share/z00988734/workspace/step5-a3/Step5/scripts/checks/05_rl_ops.py'
+export ASCEND_SRC='/mnt/share/z00988734/workspace/step5-a3/Step5/src/vllm-ascend'
+export FSDP_SRC='/mnt/share/z00988734/workspace/step5-a3/Step5/src/FSDPTurbo'
+export IRS_OUT='/你的路径/a3-indexer-region-score-001'
+export OP_DEVICE=0
+for op_case in indexer_region_score indexer_region_score_long indexer_region_score_vs_triton; do
+    python "$OP_CHECK" preflight --only "$op_case" --device "$OP_DEVICE" --ascend-src "$ASCEND_SRC" --fsdp-src "$FSDP_SRC" --out "$IRS_OUT/$op_case" || echo "请查看 $IRS_OUT/$op_case/$op_case.log"
+done
+```
+
+* `indexer_region_score` 调用迁移分支的生产包装函数，检查 TP8 单 rank 输入、3072-token 配置对应的 384 个 region 容量，以及整批短 prefill 没有完整历史 region 的边界。top-k 为 512。
+* `indexer_region_score_long` 复用固定源码中 decode、prefill 和确定性用例。长输入使可见 region 数超过 512，可以检查实际筛选；检查项包括逻辑 ID 升序、因果可见范围和 `-1` 填充。
+* `indexer_region_score_vs_triton` 复用固定源码的两项数值对照，只比较因果可见区域的分数和选中 ID。若这一组失败，请按 traceback 区分 ACLNN 调用、Triton 参考实现和结果断言。
+
 #### 旧日志出现 ModelScope 或 snapshot_download
 
-固定版 vllm-ascend 的 `tests/e2e/conftest.py` 在模块顶层导入 `snapshot_download`，供 LoRA 端到端测试的 fixture 使用。若 traceback 停在这行并报 `No module named 'modelscope'`，pytest 在收集测试前就退出了，这一行没有执行下载。三个直接从 E2E 目录收集的预检组是 `rollout_swiglustep`、`decode_sparse_meta` 和 `fused_add_norm`。新版从 `single_node/ops` 开始加载 pytest 配置，保留设备初始化和自定义算子注册。生成在输出目录的单卡用例也限定了配置搜索范围。预检子进程设置 `VLLM_USE_MODELSCOPE=false`，因为这些用例只使用本地配置和测试张量。
+固定版 vllm-ascend 的 `tests/e2e/conftest.py` 在模块顶层导入 `snapshot_download`，供 LoRA 端到端测试的 fixture 使用。若 traceback 停在这行并报 `No module named 'modelscope'`，pytest 在收集测试前就退出了，这一行没有执行下载。旧预检中直接从 E2E 目录收集的三个组是 `rollout_swiglustep`、`decode_sparse_meta` 和 `fused_add_norm`。新版从 `single_node/ops` 开始加载 pytest 配置，保留设备初始化和自定义算子注册。生成在输出目录的单卡用例也限定了配置搜索范围。预检子进程设置 `VLLM_USE_MODELSCOPE=false`，因为这些用例只使用本地配置和测试张量。
 
 先更新已检出的 `a5toa3` 分支，再用下面的命令逐项重跑旧日志里确实缺少 ModelScope 的组。沿用第一步的 `OP_CHECK`、`ASCEND_SRC`、`FSDP_SRC`、`MODEL`，把 `OP_OUT` 指向**旧预检目录**。每组结果写入新的独立目录。
 

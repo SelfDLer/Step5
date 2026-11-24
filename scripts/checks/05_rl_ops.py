@@ -148,6 +148,7 @@ def preflight(args):
     fused = args.fsdp_src / "tests/step5_fused_ops"
     ascend_ops = args.ascend_src / "tests/e2e/nightly/single_node/ops"
     triton = ascend_ops / "singlecard_ops/triton"
+    region_score_tests = ascend_ops / "singlecard_ops/test_indexer_region_score.py"
     cases = {
         "gbsa_gbsag": [checks / "03_check_gbsa.py", "--expected-prefix", sys.prefix, "--kv-heads", "4",
                        "--lengths", "7", "8", "9", "127", "128", "129"],
@@ -166,6 +167,10 @@ def preflight(args):
             "tests/unit_tests/ops/test_gbsa_tnd.py") + "::test_npu_step5_tnd_matches_bsnd_gbsa"],
         "moe_route_grad": ["-m", "pytest", checks / "test_step5_routing_npu.py"],
         "rollout_moe_gate": ["-m", "pytest", checks / "test_rollout_moe_gate_npu.py"],
+        "indexer_region_score": ["-m", "pytest", checks / "test_step5_indexer_region_score.py"],
+        "indexer_region_score_long": ["-m", "pytest", region_score_tests, "-k",
+                                     "decode_rows_contract or prefill_rows_contract or determinism"],
+        "indexer_region_score_vs_triton": ["-m", "pytest", region_score_tests, "-k", "triton_reference"],
         "rollout_swiglustep": ["-m", "pytest", triton / "test_swiglustep.py"],
         "decode_sparse_meta": ["-m", "pytest", triton / "test_step5_decode_sparse_meta.py"],
         "csa_decode_flush": ["-m", "pytest", args.out / "test_step5_csa_decode_flush.py"],
